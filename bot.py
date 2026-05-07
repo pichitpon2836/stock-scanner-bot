@@ -8,8 +8,10 @@ import pandas as pd
 from telegram import Bot
 from telegram.constants import ParseMode
 
-BOT_TOKEN = "ใส่_token_ของคุณที่นี่"
-CHAT_ID   = "6037557576"
+import os
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID")
+
 
 # หุ้น NYSE ยอดนิยม
 WATCHLIST = [
