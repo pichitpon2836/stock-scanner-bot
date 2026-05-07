@@ -168,4 +168,6 @@ async def run_scanner():
 
     print(f"✅ Done! {len(results)} stocks sent.")
 
-await run_scanner()
+if __name__ == "__main__":
+    asyncio.run(run_scanner())
+
