@@ -1,173 +1,155 @@
-import subprocess
-subprocess.run(["pip", "install", "python-telegram-bot", "yfinance", "pandas", "-q"])
-
-import asyncio
+import asyncio, os
 from datetime import datetime
 import yfinance as yf
 import pandas as pd
 from telegram import Bot
 from telegram.constants import ParseMode
 
-import os
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID")
 
-
-# หุ้น NYSE ยอดนิยม
-WATCHLIST = [
-    # Finance
-    "JPM","BAC","WFC","GS","MS","AXP","BLK","C","USB","PNC",
-    "TFC","COF","MCO","SPGI","ICE","CME","BX","KKR","APO","CG",
-    # Healthcare
-    "JNJ","PFE","MRK","ABT","TMO","DHR","BSX","SYK","MDT","EW",
-    "HUM","UNH","ELV","CVS","CI","HCA","DGX","LH","IQV","A",
-    # Energy
-    "XOM","CVX","COP","SLB","EOG","MPC","PSX","VLO","OXY","HAL",
-    "DVN","FANG","MRO","APA","HES","BKR","NOV","HP","WHD","LBRT",
-    # Industrial
-    "CAT","DE","HON","GE","ETN","EMR","PH","ROK","ITW","DOV",
-    "XYL","AME","FTV","ROP","GNRC","TT","IR","OTIS","CARR","LII",
-    # Consumer
-    "WMT","HD","TGT","LOW","COST","MCD","YUM","DRI","CMG","SHW",
-    "NKE","PVH","RL","TPR","TJX","ROST","KSS","M","GPS","ANF",
-    # Real Estate & Utilities
-    "AMT","PLD","CCI","EQIX","PSA","SPG","O","WELL","AVB","EQR",
-    # Materials
-    "LIN","APD","ECL","DD","DOW","NEM","FCX","AA","X","CLF",
-    # Tech on NYSE
-    "IBM","HPE","HPQ","NCR","DELL","WDC","STX","JNPR","CSCO","GLW",
-    # New & Hot NYSE stocks
-    "COIN","HOOD","RIVN","LCID","F","GM","STLA","TM","HMC","RACE",
-    "UAL","DAL","AAL","LUV","CCL","RCL","NCLH","MAR","HLT","H",
-    "DIS","CMCSA","FOX","FOXA","WBD","PARA","NYT","NWS","OMC","IPG",
+# Watchlist จากรูป - The Leading Stocks
+MARKET_LEADERS = [
+    "SNDK","BE","STX","LITE","WDC","CIEN","NOK","FIX",
+    "ENLT","VRT","MRVL","ASX","ARM","MU","UI","GLW","NBIS","Q"
 ]
+
+NEXT_GEN_LEADERS = [
+    "AAOI","MXL","ICHR","VIAV","FSLY","POWL","AMPX","VICR",
+    "FORM","CDNL","AGX","DOCN","ADEA","GNRC","PL","VSAT"
+]
+
+SPECULATIVE_LEADERS = [
+    "AXTI","LWLG","AEHR","SATL","XNDU","OPTX","SPIR","NVTS",
+    "UAMY","USAR","BKSY","WULF","FCEL","CRML"
+]
+
+ALL_WATCHLIST = MARKET_LEADERS + NEXT_GEN_LEADERS + SPECULATIVE_LEADERS
 
 def fetch_data(ticker):
     try:
         tk = yf.Ticker(ticker)
         info = tk.info
-
-        # กรอง NYSE เท่านั้น
-        exchange = info.get("exchange", "")
-        if exchange not in ["NYQ", "NYSE"]:
-            return None
-
         price = info.get("currentPrice") or info.get("regularMarketPrice")
         if price is None: return None
 
-        hist = tk.history(period="6mo")
-        if hist.empty or len(hist) < 30: return None
+        # ดึงข้อมูล Monthly สำหรับ EMA 10
+        hist_monthly = tk.history(period="3y", interval="1mo")
+        if hist_monthly.empty or len(hist_monthly) < 11: return None
 
-        ma20 = hist["Close"].rolling(20).mean().iloc[-1]
-        price_1m_ago = hist["Close"].iloc[-21] if len(hist) >= 21 else hist["Close"].iloc[0]
-        price_3m_ago = hist["Close"].iloc[-63] if len(hist) >= 63 else hist["Close"].iloc[0]
+        ema10_monthly = hist_monthly["Close"].ewm(span=10, adjust=False).mean()
+        ema10_current = ema10_monthly.iloc[-1]
+        ema10_prev    = ema10_monthly.iloc[-2]
+        price_prev    = hist_monthly["Close"].iloc[-2]
+
+        # Break = ราคาเดือนนี้อยู่เหนือ EMA10 แต่เดือนก่อนอยู่ใต้
+        is_breaking = price > ema10_current and price_prev <= ema10_prev
+
+        # Momentum 1 เดือน
+        hist_daily = tk.history(period="6mo")
+        if hist_daily.empty or len(hist_daily) < 21: return None
+        price_1m_ago = hist_daily["Close"].iloc[-21]
         momentum_1m  = (price - price_1m_ago) / price_1m_ago * 100
-        momentum_3m  = (price - price_3m_ago) / price_3m_ago * 100
-        vol_recent = hist["Volume"].iloc[-5:].mean()
-        vol_avg    = hist["Volume"].iloc[-30:].mean()
+
+        # Volume
+        vol_recent = hist_daily["Volume"].iloc[-5:].mean()
+        vol_avg    = hist_daily["Volume"].iloc[-30:].mean()
         vol_ratio  = vol_recent / vol_avg if vol_avg > 0 else 0
 
-        roe = info.get("returnOnEquity")
-        fcf_3yr = []
-        cf = tk.cashflow
-        if cf is not None and not cf.empty:
-            for label in ["Free Cash Flow","freeCashFlow"]:
-                if label in cf.index:
-                    fcf_3yr = cf.loc[label].dropna().values[:3].tolist()
-                    break
+        # % above EMA10
+        pct_above_ema = (price - ema10_current) / ema10_current * 100
 
-        return {"ticker":ticker,"name":info.get("shortName",ticker),
-                "price":price,"roe":roe,"fcf_3yr":fcf_3yr,
-                "ma20":ma20,"momentum_1m":momentum_1m,
-                "momentum_3m":momentum_3m,"vol_ratio":vol_ratio,
-                "exchange":exchange}
+        return {
+            "ticker": ticker,
+            "name": info.get("shortName", ticker),
+            "price": price,
+            "ema10_monthly": ema10_current,
+            "pct_above_ema": pct_above_ema,
+            "is_breaking": is_breaking,
+            "momentum_1m": momentum_1m,
+            "vol_ratio": vol_ratio,
+        }
     except:
         return None
 
-def passes_filters(d):
-    notes, passed = [], True
-
-    # 1. ROE > 10%
-    roe = d["roe"]
-    if roe and roe*100 > 10:
-        notes.append(f"Quality ✔ ROE {roe*100:.1f}%")
-    else:
-        notes.append("Quality ✗ ROE ต่ำ"); passed = False
-
-    # 2. FCF บวกล่าสุด
-    fcf = d["fcf_3yr"]
-    if fcf and fcf[0] > 0:
-        notes.append("FCF ✔ บวกล่าสุด")
-    else:
-        notes.append("FCF ✗ ติดลบ"); passed = False
-
-    # 3. Price > MA20
-    if d["price"] > d["ma20"]:
-        notes.append("Trend ✔ Price > MA20")
-    else:
-        notes.append("Trend ✗ Price < MA20"); passed = False
-
-    # 4. ขึ้น > 20% ใน 1 เดือน
-    m1 = d["momentum_1m"]
-    if m1 >= 20:
-        notes.append(f"🔥 +{m1:.1f}% ใน 1 เดือน")
-    else:
-        notes.append(f"Momentum ✗ {m1:.1f}% (ต้อง ≥20%)"); passed = False
-
-    # 5. Volume > 1.5x
-    vol = d["vol_ratio"]
-    if vol >= 1.5:
-        notes.append(f"Volume 🔥 {vol:.1f}x avg")
-    else:
-        notes.append(f"Volume ✗ {vol:.1f}x (ต้อง ≥1.5x)"); passed = False
-
-    return passed, notes
+def get_category(ticker):
+    if ticker in MARKET_LEADERS: return "🟢 Market Leader"
+    if ticker in NEXT_GEN_LEADERS: return "🔵 Next-Gen"
+    return "🔴 Speculative"
 
 async def run_scanner():
     bot = Bot(token=BOT_TOKEN)
     results = []
-    total = len(WATCHLIST)
-    for i, ticker in enumerate(WATCHLIST):
+    total = len(ALL_WATCHLIST)
+
+    for i, ticker in enumerate(ALL_WATCHLIST):
         print(f"[{i+1}/{total}] {ticker}...")
         d = fetch_data(ticker)
         if not d: continue
-        passed, notes = passes_filters(d)
-        if not passed: continue
-        results.append({"ticker":d["ticker"],"name":d["name"],
-                        "price":d["price"],"momentum_1m":d["momentum_1m"],
-                        "momentum_3m":d["momentum_3m"],
-                        "vol":d["vol_ratio"],"notes":notes})
+        if d["price"] > d["ema10_monthly"]:  # อยู่เหนือ EMA10 Monthly
+            results.append(d)
 
-    results.sort(key=lambda x: x["momentum_1m"], reverse=True)
+    # เรียงตาม % above EMA10
+    results.sort(key=lambda x: x["pct_above_ema"], reverse=True)
     now = datetime.now().strftime("%d %b %Y %H:%M")
 
     if not results:
-        await bot.send_message(chat_id=CHAT_ID,
-            text=f"🔥 *NYSE หุ้นซิ่ง — {now}*\n\nไม่มีหุ้นซิ่งใน NYSE วันนี้ครับ",
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=f"📊 *EMA10 Monthly Scanner — {now}*\n\nไม่มีหุ้นอยู่เหนือ EMA10 Monthly วันนี้",
             parse_mode=ParseMode.MARKDOWN)
-        print("No stocks passed.")
         return
 
-    header = f"🔥 *NYSE หุ้นซิ่ง — {now}*\n"
-    header += f"✅ *{len(results)} หุ้นผ่าน!*\n"
+    # แยก Breaking vs Above
+    breaking = [r for r in results if r["is_breaking"]]
+    above    = [r for r in results if not r["is_breaking"]]
+
+    header = f"📊 *EMA10 Monthly Scanner — {now}*\n"
+    header += f"✅ *{len(results)} หุ้นอยู่เหนือ EMA10 Monthly*\n"
+    if breaking:
+        header += f"🚨 *{len(breaking)} หุ้นกำลัง BREAK ขึ้นใหม่!*\n"
     header += "─────────────────────\n"
     await bot.send_message(chat_id=CHAT_ID, text=header, parse_mode=ParseMode.MARKDOWN)
 
-    for r in results:
-        msg = f"🚀 *{r['ticker']}* — {r['name']}\n"
-        msg += "```\n"
-        msg += f"Price        ${r['price']:.2f}\n"
-        msg += f"1M Gain      +{r['momentum_1m']:.1f}%\n"
-        msg += f"3M Gain      +{r['momentum_3m']:.1f}%\n"
-        msg += f"Volume       {r['vol']:.1f}x avg\n"
-        msg += "```\n"
-        for n in r["notes"]:
-            msg += f"  • {n}\n"
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
-        await asyncio.sleep(0.3)
+    # ส่งหุ้น Breaking ก่อน
+    if breaking:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text="🚨 *กำลัง BREAK EMA10 Monthly!*",
+            parse_mode=ParseMode.MARKDOWN)
+        for r in breaking:
+            msg = f"⚡ *{r['ticker']}* — {r['name']}\n"
+            msg += f"{get_category(r['ticker'])}\n"
+            msg += "```\n"
+            msg += f"Price          ${r['price']:.2f}\n"
+            msg += f"EMA10 Monthly  ${r['ema10_monthly']:.2f}\n"
+            msg += f"Above EMA10    +{r['pct_above_ema']:.1f}%\n"
+            msg += f"1M Momentum    +{r['momentum_1m']:.1f}%\n"
+            msg += f"Volume         {r['vol_ratio']:.1f}x avg\n"
+            msg += "```\n"
+            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
+            await asyncio.sleep(0.3)
+
+    # ส่งหุ้นที่อยู่เหนือ EMA10 แล้ว
+    if above:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text="📈 *อยู่เหนือ EMA10 Monthly แล้ว*",
+            parse_mode=ParseMode.MARKDOWN)
+        for r in above:
+            msg = f"✅ *{r['ticker']}* — {r['name']}\n"
+            msg += f"{get_category(r['ticker'])}\n"
+            msg += "```\n"
+            msg += f"Price          ${r['price']:.2f}\n"
+            msg += f"EMA10 Monthly  ${r['ema10_monthly']:.2f}\n"
+            msg += f"Above EMA10    +{r['pct_above_ema']:.1f}%\n"
+            msg += f"1M Momentum    +{r['momentum_1m']:.1f}%\n"
+            msg += f"Volume         {r['vol_ratio']:.1f}x avg\n"
+            msg += "```\n"
+            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
+            await asyncio.sleep(0.3)
 
     print(f"✅ Done! {len(results)} stocks sent.")
 
 if __name__ == "__main__":
     asyncio.run(run_scanner())
-
