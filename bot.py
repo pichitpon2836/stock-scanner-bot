@@ -86,8 +86,8 @@ async def run_scanner():
         print(f"[{i+1}/{total}] {ticker}...")
         d = fetch_data(ticker)
         if not d: continue
-        if d["price"] > d["ema10_monthly"]:  # อยู่เหนือ EMA10 Monthly
-            results.append(d)
+        if d["is_breaking"]:  # กำลัง Break EMA10 Monthly เดือนนี้!
+
 
     # เรียงตาม % above EMA10
     results.sort(key=lambda x: x["pct_above_ema"], reverse=True)
