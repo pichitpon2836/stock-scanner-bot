@@ -1,7 +1,6 @@
 import asyncio, os
 from datetime import datetime
 import yfinance as yf
-import pandas as pd
 from telegram import Bot
 from telegram.constants import ParseMode
 
@@ -34,27 +33,54 @@ def fetch_data(ticker):
         price = info.get("currentPrice") or info.get("regularMarketPrice")
         if price is None:
             return None
-        hist_monthly = tk.history(period="3y", interval="1mo")
-        if hist_monthly.empty or len(hist_monthly) < 11:
+
+        hist = tk.history(period="6mo")
+        if hist.empty or len(hist) < 30:
             return None
-        ema10 = hist_monthly["Close"].ewm(span=10, adjust=False).mean()
-        ema10_now  = ema10.iloc[-1]
-        ema10_prev = ema10.iloc[-2]
-        price_prev = hist_monthly["Close"].iloc[-2]
-        is_breaking = (price > ema10_now) and (price_prev <= ema10_prev)
-        pct_above = (price - ema10_now) / ema10_now * 100
-        hist_daily = tk.history(period="6mo")
-        if hist_daily.empty or len(hist_daily) < 21:
+
+        # คำนวณ SMA21
+        sma21 = hist["Close"].rolling(21).mean()
+
+        close_today    = hist["Close"].iloc[-1]
+        close_prev     = hist["Close"].iloc[-2]
+        close_2d_ago   = hist["Close"].iloc[-3]
+        sma21_today    = sma21.iloc[-1]
+        sma21_prev     = sma21.iloc[-2]
+        sma21_2d_ago   = sma21.iloc[-3]
+
+        # 2 Close Above SMA21
+        two_close_above = (
+            close_today  > sma21_today  and
+            close_prev   > sma21_prev
+        )
+
+        # เพิ่งทะลุ = วันก่อนหน้าอยู่ใต้ SMA21
+        just_broke = (
+            two_close_above and
+            close_2d_ago <= sma21_2d_ago
+        )
+
+        if not two_close_above:
             return None
-        momentum_1m = (price - hist_daily["Close"].iloc[-21]) / hist_daily["Close"].iloc[-21] * 100
-        vol_ratio = hist_daily["Volume"].iloc[-5:].mean() / hist_daily["Volume"].iloc[-30:].mean()
+
+        # Momentum
+        price_1m_ago = hist["Close"].iloc[-21]
+        momentum_1m  = (price - price_1m_ago) / price_1m_ago * 100
+
+        # Volume
+        vol_recent = hist["Volume"].iloc[-5:].mean()
+        vol_avg    = hist["Volume"].iloc[-20:].mean()
+        vol_ratio  = vol_recent / vol_avg if vol_avg > 0 else 0
+
+        pct_above_sma = (price - sma21_today) / sma21_today * 100
+
         return {
             "ticker": ticker,
             "name": info.get("shortName", ticker),
             "price": price,
-            "ema10": ema10_now,
-            "pct_above": pct_above,
-            "is_breaking": is_breaking,
+            "sma21": sma21_today,
+            "pct_above_sma": pct_above_sma,
+            "just_broke": just_broke,
             "momentum_1m": momentum_1m,
             "vol_ratio": vol_ratio,
         }
@@ -63,39 +89,79 @@ def fetch_data(ticker):
 
 async def run_scanner():
     bot = Bot(token=BOT_TOKEN)
-    breaking = []
+    just_broke_list = []
+    above_list = []
     total = len(ALL_WATCHLIST)
+
     for i, ticker in enumerate(ALL_WATCHLIST):
         print(f"[{i+1}/{total}] {ticker}...")
         d = fetch_data(ticker)
-        if d and d["is_breaking"]:
-            breaking.append(d)
-    breaking.sort(key=lambda x: x["pct_above"], reverse=True)
+        if not d:
+            continue
+        if d["just_broke"]:
+            just_broke_list.append(d)
+        else:
+            above_list.append(d)
+
+    just_broke_list.sort(key=lambda x: x["pct_above_sma"], reverse=True)
+    above_list.sort(key=lambda x: x["pct_above_sma"], reverse=True)
+    total_found = len(just_broke_list) + len(above_list)
     now = datetime.now().strftime("%d %b %Y %H:%M")
-    if not breaking:
+
+    if total_found == 0:
         await bot.send_message(
             chat_id=CHAT_ID,
-            text=f"📊 *EMA10 Monthly Break Scanner — {now}*\n\nไม่มีหุ้น Break EMA10 Monthly เดือนนี้",
+            text=f"📊 *21 SMA Scanner — {now}*\n\nไม่มีหุ้น 2 Close Above SMA21 วันนี้",
             parse_mode=ParseMode.MARKDOWN)
-        print("No breaking stocks.")
+        print("No stocks found.")
         return
-    header = f"🚨 *EMA10 Monthly Break Scanner — {now}*\n"
-    header += f"⚡ *{len(breaking)} หุ้นกำลัง BREAK EMA10 Monthly!*\n"
+
+    header = f"📊 *21 SMA Scanner — {now}*\n"
+    header += f"✅ *{total_found} หุ้น 2 Close Above SMA21*\n"
+    if just_broke_list:
+        header += f"🚨 *{len(just_broke_list)} หุ้นเพิ่งทะลุขึ้นมาใหม่!*\n"
     header += "─────────────────────\n"
     await bot.send_message(chat_id=CHAT_ID, text=header, parse_mode=ParseMode.MARKDOWN)
-    for r in breaking:
-        msg = f"🚀 *{r['ticker']}* — {r['name']}\n"
-        msg += f"{get_category(r['ticker'])}\n"
-        msg += "```\n"
-        msg += f"Price          ${r['price']:.2f}\n"
-        msg += f"EMA10 Monthly  ${r['ema10']:.2f}\n"
-        msg += f"Above EMA10    +{r['pct_above']:.1f}%\n"
-        msg += f"1M Momentum    +{r['momentum_1m']:.1f}%\n"
-        msg += f"Volume         {r['vol_ratio']:.1f}x avg\n"
-        msg += "```\n"
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
-        await asyncio.sleep(0.3)
-    print(f"Done! {len(breaking)} stocks sent.")
+
+    # ส่งหุ้นที่เพิ่งทะลุก่อน
+    if just_broke_list:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text="🚨 *เพิ่ง Break SMA21 — 2 Close Above!*",
+            parse_mode=ParseMode.MARKDOWN)
+        for r in just_broke_list:
+            msg = f"⚡ *{r['ticker']}* — {r['name']}\n"
+            msg += f"{get_category(r['ticker'])}\n"
+            msg += "```\n"
+            msg += f"Price        ${r['price']:.2f}\n"
+            msg += f"SMA21        ${r['sma21']:.2f}\n"
+            msg += f"Above SMA21  +{r['pct_above_sma']:.1f}%\n"
+            msg += f"1M Momentum  +{r['momentum_1m']:.1f}%\n"
+            msg += f"Volume       {r['vol_ratio']:.1f}x avg\n"
+            msg += "```\n"
+            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
+            await asyncio.sleep(0.3)
+
+    # ส่งหุ้นที่อยู่เหนือ SMA21 แล้ว
+    if above_list:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text="📈 *2 Close Above SMA21 แล้ว*",
+            parse_mode=ParseMode.MARKDOWN)
+        for r in above_list:
+            msg = f"✅ *{r['ticker']}* — {r['name']}\n"
+            msg += f"{get_category(r['ticker'])}\n"
+            msg += "```\n"
+            msg += f"Price        ${r['price']:.2f}\n"
+            msg += f"SMA21        ${r['sma21']:.2f}\n"
+            msg += f"Above SMA21  +{r['pct_above_sma']:.1f}%\n"
+            msg += f"1M Momentum  +{r['momentum_1m']:.1f}%\n"
+            msg += f"Volume       {r['vol_ratio']:.1f}x avg\n"
+            msg += "```\n"
+            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
+            await asyncio.sleep(0.3)
+
+    print(f"Done! {total_found} stocks sent.")
 
 if __name__ == "__main__":
     asyncio.run(run_scanner())
