@@ -70,15 +70,7 @@ def fetch_data(ticker):
         if growth is None or growth < 0:
             return None
 
-        fcf_ok = False
-        try:
-            cf = tk.cashflow
-            if cf is not None and not cf.empty:
-                for label in ["Free Cash Flow", "freeCashFlow"]:
-                    if label in cf.index:
-                        val = cf.loc[label].dropna().values[0]
-                        fcf_ok = val > 0
-                        break
+        
         except:
             pass
         if not fcf_ok:
