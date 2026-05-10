@@ -2,9 +2,8 @@ name: VI Stock Scanner Daily
 
 on:
   schedule:
-    # 07:00 Bangkok time = 00:00 UTC
-    - cron: '0 0 * * 1-5'   # จันทร์-ศุกร์ เท่านั้น (ตลาดเปิด)
-  workflow_dispatch:          # กดรันมือได้จาก GitHub UI
+    - cron: '0 0 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   scan:
@@ -23,7 +22,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run VI Scanner
+      - name: Run scanner
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
