@@ -1,164 +1,201 @@
-import asyncio, os
+“””
+VI Stock Scanner — Buffett / Lynch / Nick Sleep
+GitHub Actions: อ่าน TELEGRAM_TOKEN และ TELEGRAM_CHAT_ID จาก Secrets
+“””
+
+import os, sys, time, requests, yfinance as yf
 from datetime import datetime
-import yfinance as yf
-from telegram import Bot
-from telegram.constants import ParseMode
+import pytz
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID   = os.environ.get("TELEGRAM_CHAT_ID")
+BOT_TOKEN = os.environ[“TELEGRAM_TOKEN”]
+CHAT_ID   = os.environ[“TELEGRAM_CHAT_ID”]
+TIMEZONE  = “Asia/Bangkok”
+TOP_N     = 3
 
-ALL_WATCHLIST = list(set([
-    "MMM","ABT","ABBV","ACN","ADBE","AMD","AFL","A","APD","ABNB","AKAM","ALB",
-    "ALL","GOOGL","GOOG","MO","AMZN","AEP","AXP","AIG","AMT","AMP","AMGN",
-    "ADI","ANSS","AON","AAPL","AMAT","ANET","T","ADSK","ADP","AZO","BKR",
-    "BAC","BAX","BDX","BRK-B","BIO","BIIB","BLK","BX","BA","BSX","BMY",
-    "AVGO","BR","CDNS","COF","CAH","CAT","CBOE","CBRE","CNC","SCHW","CHTR",
-    "CVX","CMG","CB","CI","CTAS","CSCO","C","CLX","CME","KO","CTSH","CL",
-    "CMCSA","COP","STZ","CEG","CPRT","GLW","COST","CCI","CSX","CMI","CVS",
-    "DHI","DHR","DRI","DE","DAL","DVN","DXCM","DLR","DFS","DG","DLTR","D",
-    "DOV","DOW","DTE","DUK","DD","EMN","ETN","EBAY","ECL","EW","EA","ELV",
-    "LLY","EMR","ENPH","ETR","EOG","EFX","EQIX","EL","EXC","XOM","FDS",
-    "FICO","FAST","FDX","FIS","FITB","FE","FI","FLT","F","FTNT","FCX",
-    "GRMN","GE","GEHC","GD","GIS","GM","GILD","GS","HAL","HIG","HCA","HSY",
-    "HES","HPE","HLT","HD","HON","HRL","HPQ","HUM","IBM","IDXX","ITW","IR",
-    "INTC","ICE","INTU","ISRG","IQV","JNJ","JCI","JPM","K","KDP","KEY",
-    "KMB","KMI","KLAC","KHC","KR","LHX","LH","LRCX","LIN","LKQ","LMT","L",
-    "LOW","LULU","MTB","MRO","MPC","MAR","MMC","MA","MKC","MCD","MCK","MDT",
-    "MRK","META","MET","MGM","MCHP","MU","MSFT","MRNA","MDLZ","MNST","MCO",
-    "MS","MSI","NDAQ","NOC","NRG","NEM","NFLX","NEE","NKE","NSC","NUE",
-    "NVDA","NXPI","ORLY","OXY","ODFL","ON","OKE","ORCL","PCAR","PLTR","PH",
-    "PAYX","PEP","PFE","PM","PSX","PNC","PPG","PG","PGR","PRU","PSA","PHM",
-    "PWR","QCOM","RTX","REGN","RSG","RMD","ROP","ROST","SPGI","CRM","SLB",
-    "SRE","NOW","SHW","SNA","SO","SWK","SBUX","STT","STE","SYK","SYF",
-    "SNPS","SYY","TMUS","TROW","TGT","TEL","TSLA","TXN","TMO","TJX","TT",
-    "TDG","TRV","TFC","TSN","USB","UBER","UNP","UPS","URI","UNH","VLO","VZ",
-    "VRTX","V","VMC","WMT","WM","WAT","WEC","WFC","WELL","WDC","WMB","GWW",
-    "XEL","XYL","YUM","ZBRA","ZBH","ZTS",
-    # Nasdaq100
-    "ADBE","ADP","ABNB","AMZN","AMD","AMGN","ADI","ANSS","AAPL","AMAT",
-    "ASML","TEAM","ADSK","BIIB","AVGO","CDNS","CHTR","CTAS","CSCO","CTSH",
-    "CMCSA","CEG","CPRT","COST","CRWD","CSX","DDOG","DXCM","FANG","DLTR",
-    "DASH","EA","EBAY","ENPH","FAST","FTNT","GEHC","GILD","HON","IDXX",
-    "INTC","INTU","ISRG","KDP","KLAC","LRCX","LULU","MAR","MRVL","MELI",
-    "META","MCHP","MU","MSFT","MRNA","MDLZ","MNST","NFLX","NVDA","NXPI",
-    "ORLY","ON","PCAR","PANW","PAYX","PYPL","QCOM","REGN","ROST","SBUX",
-    "SNPS","TMUS","TSLA","TXN","TTD","VRSK","VRTX","WDAY","XEL","ZS",
-    "ARM","PLTR","APP","MSTR","COIN",
-    # Dow Jones
-    "AAPL","AMGN","AXP","BA","CAT","CRM","CSCO","CVX","DIS","DOW",
-    "GS","HD","HON","IBM","INTC","JNJ","JPM","KO","MCD","MMM",
-    "MRK","MSFT","NKE","PG","TRV","UNH","V","VZ","WMT",
-]))
+WATCHLIST = [
+“AAPL”,“MSFT”,“GOOGL”,“AMZN”,“META”,“NVDA”,“BRK-B”,
+“JPM”,“V”,“MA”,“UNH”,“JNJ”,“PG”,“KO”,“WMT”,
+“HD”,“COST”,“ADBE”,“CRM”,“NFLX”,“TSM”,“AVGO”,
+“LLY”,“TMO”,“ABBV”,“MCD”,“NKE”,“SBUX”,“DIS”,
+“SCHW”,“CI”,“TTD”,“FDS”,“KR”,
+]
 
-def fetch_data(ticker):
-    try:
-        tk = yf.Ticker(ticker)
-        info = tk.info
-        price = info.get("currentPrice") or info.get("regularMarketPrice")
-        if not price or price <= 0:
-            return None
+# ── Telegram ──────────────────────────────────
 
-        roe = info.get("returnOnEquity")
-        debt_eq = info.get("debtToEquity")
-        if roe is None or debt_eq is None:
-            return None
-        debt_eq = debt_eq / 100.0
-        if not (roe * 100 > 10 and debt_eq < 2.0):
-            return None
+def send(text: str):
+r = requests.post(
+f”https://api.telegram.org/bot{BOT_TOKEN}/sendMessage”,
+json={“chat_id”: CHAT_ID, “text”: text, “parse_mode”: “HTML”},
+timeout=15,
+)
+r.raise_for_status()
+time.sleep(0.5)
 
-        growth = info.get("earningsGrowth")
-        if growth is None or growth < 0:
-            return None
+# ── Fetch ─────────────────────────────────────
 
-        
-        except:
-            pass
-        if not fcf_ok:
-            return None
+def fetch(ticker: str) -> dict | None:
+try:
+info = yf.Ticker(ticker).info
+price = info.get(“currentPrice”) or info.get(“regularMarketPrice”)
+if not price:
+return None
+return dict(
+ticker       = ticker,
+name         = info.get(“shortName”, ticker),
+price        = price,
+eps_fwd      = info.get(“forwardEps”),
+eps_ttm      = info.get(“trailingEps”),
+growth       = info.get(“earningsGrowth”) or info.get(“revenueGrowth”),
+rev_growth   = info.get(“revenueGrowth”),
+fcf          = info.get(“freeCashflow”),
+shares       = info.get(“sharesOutstanding”),
+roe          = info.get(“returnOnEquity”),
+net_margin   = info.get(“profitMargins”),
+gross_margin = info.get(“grossMargins”),
+peg          = info.get(“pegRatio”),
+insider_pct  = info.get(“heldPercentInsiders”),
+desc         = (info.get(“longBusinessSummary”) or “”)[:120],
+)
+except:
+return None
 
-        eps = info.get("trailingEps")
-        book_value = info.get("bookValue")
-        g = growth * 100
+# ── Quality score ─────────────────────────────
 
-        graham = eps * (8.5 + 2 * g) * 0.67 if eps and eps > 0 else None
-        buffett = book_value * ((1 + roe) ** 5) * 0.75 if book_value and roe else None
-        lynch = eps * g * 0.80 if eps and eps > 0 and g > 0 else None
+def score(d: dict) -> int:
+s = 0
+if d[“roe”]          and d[“roe”]          >= 0.15: s += 25
+if d[“net_margin”]   and d[“net_margin”]   >= 0.15: s += 25
+if d[“gross_margin”] and d[“gross_margin”] >= 0.40: s += 25
+if d[“rev_growth”]   and d[“rev_growth”]   >= 0.10: s += 25
+return s
 
-        prices = [p for p in [graham, buffett, lynch] if p]
-        if not prices:
-            return None
-        avg = sum(prices) / len(prices)
-        discount = (avg - price) / avg * 100
-        mktcap = info.get("marketCap", 0)
+# ── Legend logic ──────────────────────────────
 
-        return {
-            "ticker":   ticker,
-            "name":     info.get("shortName", ticker),
-            "price":    price,
-            "graham":   graham,
-            "buffett":  buffett,
-            "lynch":    lynch,
-            "avg":      avg,
-            "discount": discount,
-            "roe":      roe * 100,
-            "debt_eq":  debt_eq,
-            "growth":   g,
-            "mktcap":   mktcap,
-            "is_small": price < 20,
-        }
-    except:
-        return None
+def buffett(d):
+eps = d[“eps_fwd”]
+if not eps or eps <= 0: return None
+fair = eps * 22
+buy  = fair * 0.85
+gap  = (d[“price”] - buy) / buy
+if gap > 0.10: return None
+m = []
+if d[“roe”]:         m.append(f”ROE {d[‘roe’]*100:.0f}%”)
+if d[“net_margin”]:  m.append(f”NM {d[‘net_margin’]*100:.0f}%”)
+if d[“gross_margin”]:m.append(f”GM {d[‘gross_margin’]*100:.0f}%”)
+return _row(d, fair, buy, gap, “ · “.join(m))
 
-def fmt(val):
-    return f"${val:.2f}" if val else "N/A"
+def lynch(d):
+eps    = d[“eps_ttm”] or d[“eps_fwd”]
+growth = d[“growth”]
+if not eps or eps <= 0 or not growth or growth <= 0: return None
+gp   = growth * 100
+fair = eps * gp
+buy  = fair * 0.95
+gap  = (d[“price”] - buy) / buy
+if gap > 0.10: return None
+peg  = f”PEG {d[‘peg’]:.2f}” if d[“peg”] else f”PEG ~{d[‘price’]/fair:.2f}”
+m    = [peg, f”EPS +{gp:.0f}%”]
+if d[“rev_growth”]: m.append(f”Rev +{d[‘rev_growth’]*100:.0f}%”)
+return _row(d, fair, buy, gap, “ · “.join(m))
 
-async def run_scanner():
-    bot = Bot(token=BOT_TOKEN)
-    results = []
-    total = len(ALL_WATCHLIST)
+def sleep(d):
+if not d[“fcf”] or not d[“shares”] or d[“shares”] <= 0: return None
+fcf_ps = d[“fcf”] / d[“shares”]
+if fcf_ps <= 0: return None
+fair = fcf_ps / 0.04
+buy  = fair * 0.90
+gap  = (d[“price”] - buy) / buy
+if gap > 0.10: return None
+m = []
+if d[“rev_growth”]:  m.append(f”Rev +{d[‘rev_growth’]*100:.0f}%”)
+if d[“roe”]:         m.append(f”ROE {d[‘roe’]*100:.0f}%”)
+if d[“insider_pct”]: m.append(f”Insider {d[‘insider_pct’]*100:.1f}%”)
+return _row(d, fair, buy, gap, “ · “.join(m))
 
-    for i, ticker in enumerate(ALL_WATCHLIST):
-        print(f"[{i+1}/{total}] {ticker}...")
-        d = fetch_data(ticker)
-        if d:
-            results.append(d)
+def _row(d, fair, buy, gap, metrics):
+return dict(
+ticker  = d[“ticker”],
+name    = d[“name”],
+score   = score(d),
+status  = “🟢 BUY ZONE” if d[“price”] <= buy else “🟡 WATCH”,
+price   = d[“price”],
+fair    = fair,
+buy     = buy,
+disc    = (d[“price”] - fair) / fair * 100,
+metrics = metrics,
+desc    = d[“desc”],
+gap     = gap,
+)
 
-    results.sort(key=lambda x: x["discount"], reverse=True)
-    now = datetime.now().strftime("%d %b %Y %H:%M")
+# ── Format ────────────────────────────────────
 
-    if not results:
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text=f"📊 *VI Legends Scanner — {now}*\n\nไม่มีหุ้นผ่านเกณฑ์วันนี้",
-            parse_mode=ParseMode.MARKDOWN)
-        return
+def fmt(rank, s, prefix=””):
+lines = [
+f”\n#{rank} {prefix}{s[‘ticker’]} — {s[‘name’]}”,
+f”  Quality: {s[‘score’]}/100 | Status: {s[‘status’]}”,
+f”  Current: ${s[‘price’]:.2f} | Fair: ${s[‘fair’]:.2f} ({s[‘disc’]:+.0f}%) | Buy: ${s[‘buy’]:.2f}”,
+f”  ✓ {s[‘metrics’]}”,
+]
+if s[“desc”]:
+lines.append(f”  💼 {s[‘desc’]}”)
+return “\n”.join(lines)
 
-    header = f"💎 *VI Legends Scanner — {now}*\n"
-    header += f"📊 SP500 + Nasdaq + Dow Jones\n"
-    header += f"✅ *{len(results)} หุ้นผ่านเกณฑ์!*\n"
-    header += "─────────────────────\n"
-    await bot.send_message(chat_id=CHAT_ID, text=header, parse_mode=ParseMode.MARKDOWN)
+# ── Main ──────────────────────────────────────
 
-    for r in results:
-        mktcap_str = f"${r['mktcap']/1e9:.1f}B" if r['mktcap'] > 1e9 else f"${r['mktcap']/1e6:.0f}M" if r['mktcap'] else "N/A"
-        star = "⭐" if r["is_small"] else "✅"
-        msg = f"{star} *{r['ticker']}* — {r['name']}\n"
-        msg += "```\n"
-        msg += f"Price      {fmt(r['price'])}\n"
-        msg += f"Graham     {fmt(r['graham'])}\n"
-        msg += f"Buffett    {fmt(r['buffett'])}\n"
-        msg += f"Lynch      {fmt(r['lynch'])}\n"
-        msg += f"Avg Legend {fmt(r['avg'])}\n"
-        msg += f"Discount   {r['discount']:+.1f}%\n"
-        msg += f"ROE        {r['roe']:.1f}%\n"
-        msg += f"D/E        {r['debt_eq']:.2f}\n"
-        msg += f"Growth     {r['growth']:.1f}%\n"
-        msg += f"Mkt Cap    {mktcap_str}\n"
-        msg += "```\n"
-        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
-        await asyncio.sleep(0.3)
+def main():
+print(f”Scanning {len(WATCHLIST)} tickers…”)
+buf, lyn, slp = [], [], []
 
-    print(f"Done! {len(results)} stocks sent.")
+```
+for t in WATCHLIST:
+    d = fetch(t)
+    if not d: continue
+    if r := buffett(d): buf.append(r)
+    if r := lynch(d):   lyn.append(r)
+    if r := sleep(d):   slp.append(r)
 
-if __name__ == "__main__":
-    asyncio.run(run_scanner())
+key = lambda x: (x["gap"], -x["score"])
+buf.sort(key=key); lyn.sort(key=key); slp.sort(key=key)
+
+today = datetime.now(pytz.timezone(TIMEZONE)).strftime("%d %b %Y")
+
+# Header
+send(
+    f"📊 <b>VI Daily Scan — {today}</b>\n"
+    f"🟢 BUY ZONE = ราคา ≤ Buy Price\n"
+    f"🟡 WATCH = เหนือ Buy 0–10%\n"
+    f"⚠️ ตรวจสอบก่อนลงทุนทุกครั้ง"
+)
+
+# Buffett
+if buf:
+    send(
+        "🏰 <b>What WARREN BUFFETT Would Buy Today</b>\n"
+        "(Fair = EPS × 22 · Buy = Fair × 0.85)"
+        + "".join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N]))
+    )
+
+# Lynch
+if lyn:
+    send(
+        "📈 <b>What PETER LYNCH Would Buy Today</b>\n"
+        "(Fair = EPS × Growth · Buy = Fair × 0.95)"
+        + "".join(fmt(i+1, s, "🚀 Fast Grower · ") for i, s in enumerate(lyn[:TOP_N]))
+    )
+
+# Sleep
+if slp:
+    send(
+        "🎯 <b>What NICK SLEEP Would Buy Today</b>\n"
+        "(Fair = FCF/0.04 · Buy = Fair × 0.90)"
+        + "".join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N]))
+    )
+
+if not buf and not lyn and not slp:
+    send("📊 VI Daily Scan — ไม่พบหุ้นใน BUY/WATCH ZONE วันนี้")
+
+print("Done.")
+```
+
+if **name** == “**main**”:
+main()
