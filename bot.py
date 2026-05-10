@@ -21,19 +21,19 @@ SP500 = [
     "APH","ADI","ANSS","AON","APA","AAPL","AMAT","APTV","ACGL","ADM","ANET",
     "AJG","AIZ","T","ATO","ADSK","ADP","AZO","AVB","AVY","AXON","BKR","BALL",
     "BAC","BBWI","BAX","BDX","WRB","BRK-B","BBY","BIO","TECH","BIIB","BLK",
-    "BX","BA","BSX","BMY","AVGO","BR","BRO","BF-B","BLDR","BG","CDNS",
-    "CZR","CPT","CPB","COF","CAH","KMX","CCL","CARR","CAT","CBOE","CBRE",
-    "CDW","CE","COR","CNC","CNP","CF","CRL","SCHW","CHTR","CVX","CMG","CB",
-    "CHD","CI","CINF","CTAS","CSCO","C","CFG","CLX","CME","CMS","KO","CTSH",
-    "CL","CMCSA","CAG","COP","ED","STZ","CEG","COO","CPRT","GLW","CPAY",
-    "CTVA","CSGP","COST","CTRA","CCI","CSX","CMI","CVS","DHI","DHR","DRI",
-    "DVA","DECK","DE","DAL","DVN","DXCM","FANG","DLR","DFS","DG","DLTR",
-    "D","DPZ","DOV","DOW","DTE","DUK","DD","EMN","ETN","EBAY","ECL","EIX",
-    "EW","EA","ELV","LLY","EMR","ENPH","ETR","EOG","EQT","EFX","EQIX",
-    "EQR","ESS","EL","ETSY","EG","EVRG","ES","EXC","EXPE","EXPD","EXR",
-    "XOM","FFIV","FDS","FICO","FAST","FRT","FDX","FIS","FITB","FSLR","FE",
-    "FI","FLT","FMC","F","FTNT","FTV","FOXA","FOX","BEN","FCX","GRMN","IT",
-    "GE","GEHC","GEV","GEN","GNRC","GD","GIS","GM","GPC","GILD","GPN","GL",
+    "BX","BA","BSX","BMY","AVGO","BR","BRO","BLDR","BG","CDNS","CZR","CPT",
+    "CPB","COF","CAH","KMX","CCL","CARR","CAT","CBOE","CBRE","CDW","CE",
+    "COR","CNC","CNP","CF","CRL","SCHW","CHTR","CVX","CMG","CB","CHD","CI",
+    "CINF","CTAS","CSCO","C","CFG","CLX","CME","CMS","KO","CTSH","CL",
+    "CMCSA","CAG","COP","ED","STZ","CEG","COO","CPRT","GLW","CPAY","CTVA",
+    "CSGP","COST","CTRA","CCI","CSX","CMI","CVS","DHI","DHR","DRI","DVA",
+    "DECK","DE","DAL","DVN","DXCM","FANG","DLR","DFS","DG","DLTR","D",
+    "DPZ","DOV","DOW","DTE","DUK","DD","EMN","ETN","EBAY","ECL","EIX","EW",
+    "EA","ELV","LLY","EMR","ENPH","ETR","EOG","EQT","EFX","EQIX","EQR",
+    "ESS","EL","ETSY","EG","EVRG","ES","EXC","EXPE","EXPD","EXR","XOM",
+    "FFIV","FDS","FICO","FAST","FRT","FDX","FIS","FITB","FSLR","FE","FI",
+    "FLT","FMC","F","FTNT","FTV","FOXA","FOX","BEN","FCX","GRMN","IT","GE",
+    "GEHC","GEV","GEN","GNRC","GD","GIS","GM","GPC","GILD","GPN","GL",
     "GDDY","GS","HAL","HIG","HAS","HCA","HSIC","HSY","HES","HPE","HLT",
     "HOLX","HD","HON","HRL","HST","HWM","HPQ","HUBB","HUM","HBAN","HII",
     "IBM","IEX","IDXX","ITW","INCY","IR","INTC","ICE","IFF","IP","IPG",
@@ -83,84 +83,80 @@ def fetch_data(ticker):
         if not price or price <= 0:
             return None
 
-        hist = tk.history(period="6mo")
-        if hist.empty or len(hist) < 30:
-            return None
-
-        # SMA21
-        sma21 = hist["Close"].rolling(21).mean().iloc[-1]
-
-        # Momentum 1M
-        price_1m = hist["Close"].iloc[-21]
-        momentum_1m = (price - price_1m) / price_1m * 100
-        if momentum_1m < 15:
-            return None
-
-        # Momentum 1W
-        momentum_1w = (price - hist["Close"].iloc[-5]) / hist["Close"].iloc[-5] * 100
-
-        # Volume
-        vol_recent = hist["Volume"].iloc[-5:].mean()
-        vol_avg    = hist["Volume"].iloc[-20:].mean()
-        vol_ratio  = vol_recent / vol_avg if vol_avg > 0 else 0
-        if vol_ratio < 1.5:
-            return None
-
-        # Price > SMA21
-        if price <= sma21:
-            return None
-
-        # Quality Filters
-        roe     = info.get("returnOnEquity")
+        # ── Buffett Filter ─────────────────────
+        roe    = info.get("returnOnEquity")
         debt_eq = info.get("debtToEquity")
-        growth  = info.get("earningsGrowth")
-        fcf_ok  = False
+        if roe is None or debt_eq is None:
+            return None
+        debt_eq = debt_eq / 100.0
+        if not (roe * 100 > 15 and debt_eq < 1.0):
+            return None
+
+        # ── Lynch Filter ───────────────────────
+        growth = info.get("earningsGrowth")
+        if growth is None or growth * 100 < 10:
+            return None
+
+        # ── Nick Sleep Filter ──────────────────
+        fcf_list = []
         try:
             cf = tk.cashflow
             if cf is not None and not cf.empty:
-                for label in ["Free Cash Flow","freeCashFlow"]:
+                for label in ["Free Cash Flow", "freeCashFlow"]:
                     if label in cf.index:
-                        fcf_val = cf.loc[label].dropna().values[0]
-                        fcf_ok = fcf_val > 0
+                        fcf_list = cf.loc[label].dropna().values[:3].tolist()
                         break
         except:
             pass
+        if len(fcf_list) < 3 or not all(v > 0 for v in fcf_list):
+            return None
 
-        if debt_eq: debt_eq = debt_eq / 100.0
+        # ── Buy Price Calculation ──────────────
+        eps        = info.get("trailingEps")
+        book_value = info.get("bookValue")
 
-        quality_score = 0
-        quality_notes = []
-        if roe and roe * 100 > 15:
-            quality_score += 1
-            quality_notes.append(f"ROE {roe*100:.1f}%✔")
-        if debt_eq is not None and debt_eq < 1.0:
-            quality_score += 1
-            quality_notes.append(f"D/E {debt_eq:.2f}✔")
-        if growth and growth * 100 > 15:
-            quality_score += 1
-            quality_notes.append(f"Growth {growth*100:.1f}%✔")
-        if fcf_ok:
-            quality_score += 1
-            quality_notes.append("FCF✔")
+        graham = None
+        if eps and eps > 0:
+            g = growth * 100
+            graham = eps * (8.5 + 2 * g) * 0.67
+
+        buffett = None
+        if book_value and roe:
+            buffett = book_value * ((1 + roe) ** 5) * 0.75
+
+        lynch = None
+        if eps and eps > 0:
+            lynch = eps * (growth * 100) * 0.80
+
+        prices = [p for p in [graham, buffett, lynch] if p]
+        if not prices:
+            return None
+        avg = sum(prices) / len(prices)
+        discount = (avg - price) / avg * 100
 
         mktcap   = info.get("marketCap", 0)
         is_small = price < 20
 
         return {
-            "ticker":        ticker,
-            "name":          info.get("shortName", ticker),
-            "price":         price,
-            "sma21":         sma21,
-            "momentum_1m":   momentum_1m,
-            "momentum_1w":   momentum_1w,
-            "vol_ratio":     vol_ratio,
-            "quality_score": quality_score,
-            "quality_notes": quality_notes,
-            "mktcap":        mktcap,
-            "is_small":      is_small,
+            "ticker":   ticker,
+            "name":     info.get("shortName", ticker),
+            "price":    price,
+            "graham":   graham,
+            "buffett":  buffett,
+            "lynch":    lynch,
+            "avg":      avg,
+            "discount": discount,
+            "roe":      roe * 100,
+            "debt_eq":  debt_eq,
+            "growth":   growth * 100,
+            "mktcap":   mktcap,
+            "is_small": is_small,
         }
     except:
         return None
+
+def fmt(val):
+    return f"${val:.2f}" if val else "N/A"
 
 async def run_scanner():
     bot = Bot(token=BOT_TOKEN)
@@ -173,71 +169,47 @@ async def run_scanner():
         if d:
             results.append(d)
 
-    # เรียงตาม Quality Score + Momentum
-    results.sort(key=lambda x: (x["quality_score"], x["momentum_1m"]), reverse=True)
+    # เรียงตาม Discount มากสุดก่อน
+    results.sort(key=lambda x: x["discount"], reverse=True)
     now = datetime.now().strftime("%d %b %Y %H:%M")
 
     if not results:
         await bot.send_message(
             chat_id=CHAT_ID,
-            text=f"📊 *Momentum Scanner — {now}*\n\nไม่มีหุ้นผ่านเกณฑ์วันนี้",
+            text=f"📊 *VI Legends Scanner — {now}*\n\nไม่มีหุ้นผ่านเกณฑ์ VI Legends วันนี้\n📊 SP500 + Nasdaq + Dow Jones",
             parse_mode=ParseMode.MARKDOWN)
         return
 
     small = [r for r in results if r["is_small"]]
     big   = [r for r in results if not r["is_small"]]
 
-    header = f"🚀 *Momentum Scanner — {now}*\n"
+    header = f"💎 *VI Legends Scanner — {now}*\n"
     header += f"📊 SP500 + Nasdaq + Dow Jones\n"
-    header += f"✅ *{len(results)} หุ้นผ่าน!*"
+    header += f"✅ *{len(results)} หุ้นผ่านเกณฑ์ Buffett + Lynch + Nick Sleep!*\n"
     if small:
-        header += f" (⭐ {len(small)} หุ้นจิ๋ว < $20)"
-    header += "\n─────────────────────\n"
+        header += f"⭐ {len(small)} หุ้นจิ๋ว < $20\n"
+    header += "─────────────────────\n"
     await bot.send_message(chat_id=CHAT_ID, text=header, parse_mode=ParseMode.MARKDOWN)
 
-    # ส่งหุ้นจิ๋วก่อน
-    if small:
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text="⭐ *หุ้นจิ๋ว ราคา < $20*",
-            parse_mode=ParseMode.MARKDOWN)
-        for r in small:
-            mktcap_str = f"${r['mktcap']/1e9:.1f}B" if r['mktcap'] > 1e9 else f"${r['mktcap']/1e6:.0f}M" if r['mktcap'] else "N/A"
-            msg = f"⭐ *{r['ticker']}* — {r['name']}\n"
-            msg += "```\n"
-            msg += f"Price        ${r['price']:.2f}\n"
-            msg += f"Market Cap   {mktcap_str}\n"
-            msg += f"1W Momentum  +{r['momentum_1w']:.1f}%\n"
-            msg += f"1M Momentum  +{r['momentum_1m']:.1f}%\n"
-            msg += f"Volume       {r['vol_ratio']:.1f}x avg\n"
-            msg += f"Quality      {r['quality_score']}/4\n"
-            msg += "```\n"
-            if r['quality_notes']:
-                msg += "  " + " | ".join(r['quality_notes']) + "\n"
-            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
-            await asyncio.sleep(0.3)
-
-    # ส่งหุ้นใหญ่
-    if big:
-        await bot.send_message(
-            chat_id=CHAT_ID,
-            text="📈 *หุ้น Momentum แรง*",
-            parse_mode=ParseMode.MARKDOWN)
-        for r in big:
-            mktcap_str = f"${r['mktcap']/1e9:.1f}B" if r['mktcap'] > 1e9 else f"${r['mktcap']/1e6:.0f}M" if r['mktcap'] else "N/A"
-            msg = f"🚀 *{r['ticker']}* — {r['name']}\n"
-            msg += "```\n"
-            msg += f"Price        ${r['price']:.2f}\n"
-            msg += f"Market Cap   {mktcap_str}\n"
-            msg += f"1W Momentum  +{r['momentum_1w']:.1f}%\n"
-            msg += f"1M Momentum  +{r['momentum_1m']:.1f}%\n"
-            msg += f"Volume       {r['vol_ratio']:.1f}x avg\n"
-            msg += f"Quality      {r['quality_score']}/4\n"
-            msg += "```\n"
-            if r['quality_notes']:
-                msg += "  " + " | ".join(r['quality_notes']) + "\n"
-            await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
-            await asyncio.sleep(0.3)
+    for r in results:
+        mktcap_str = f"${r['mktcap']/1e9:.1f}B" if r['mktcap'] > 1e9 else f"${r['mktcap']/1e6:.0f}M" if r['mktcap'] else "N/A"
+        star = "⭐" if r["is_small"] else "✅"
+        msg = f"{star} *{r['ticker']}* — {r['name']}\n"
+        msg += "```\n"
+        msg += f"Price        {fmt(r['price'])}\n"
+        msg += f"Graham       {fmt(r['graham'])}\n"
+        msg += f"Buffett      {fmt(r['buffett'])}\n"
+        msg += f"Lynch        {fmt(r['lynch'])}\n"
+        msg += f"Avg Legend   {fmt(r['avg'])}\n"
+        msg += f"Discount     {r['discount']:+.1f}%\n"
+        msg += f"─────────────────\n"
+        msg += f"ROE          {r['roe']:.1f}%\n"
+        msg += f"D/E          {r['debt_eq']:.2f}\n"
+        msg += f"Growth       {r['growth']:.1f}%\n"
+        msg += f"Market Cap   {mktcap_str}\n"
+        msg += "```\n"
+        await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
+        await asyncio.sleep(0.3)
 
     print(f"Done! {len(results)} stocks sent.")
 
