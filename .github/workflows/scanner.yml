@@ -8,7 +8,7 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -35,12 +35,28 @@ jobs:
           TOP_N     = 3
 
           WATCHLIST = [
-              'AAPL','MSFT','GOOGL','AMZN','META','NVDA','BRK-B',
-              'JPM','V','MA','UNH','JNJ','PG','KO','WMT',
-              'HD','COST','ADBE','CRM','NFLX','TSM','AVGO',
-              'LLY','TMO','ABBV','MCD','NKE','SBUX','DIS',
-              'SCHW','CI','TTD','FDS','KR',
+              'AAPL','MSFT','NVDA','AMZN','GOOGL','META','BRK-B','LLY','AVGO','TSLA',
+              'WMT','JPM','V','UNH','XOM','ORCL','MA','COST','HD','PG',
+              'JNJ','ABBV','BAC','KO','MRK','CVX','CRM','NFLX','AMD','PEP',
+              'TMO','ACN','LIN','MCD','ABT','ADBE','PM','GE','IBM','TXN',
+              'ISRG','INTU','VZ','CAT','CMCSA','NOW','AMGN','DHR','NEE','RTX',
+              'UNP','QCOM','LOW','SPGI','GS','BKNG','MS','BLK','SYK','AMAT',
+              'T','PLD','AXP','GILD','MDT','ADI','CB','VRTX','MMC','AMT',
+              'CI','TJX','BSX','REGN','MO','DUK','SO','EOG','SLB','HCA',
+              'ZTS','BDX','ITW','ETN','AON','CME','ICE','PGR','USB','ELV',
+              'LRCX','MU','KLAC','SNPS','CDNS','MCHP','NXPI','ON','TER','ANET',
+              'DE','EMR','PH','ROK','IR','AME','CTAS','RSG','WM','ECL',
+              'APD','SHW','PPG','NUE','FCX','NEM','BALL','IP','CF','MOS',
+              'WFC','C','PNC','TFC','COF','AIG','PRU','MET','AFL','ALL',
+              'CVS','MCK','ABC','CAH','HUM','CNC','MOH','DVA','LH','DGX',
+              'AMZN','EBAY','ETSY','W','CHWY','CVNA','DKNG','LYFT','UBER','ABNB',
+              'COP','PSX','VLO','MPC','OXY','DVN','FANG','APA','HES','HAL',
+              'DIS','CMCSA','PARA','WBD','LYV','NFLX','SPOT','TTD','ROKU','MTCH',
+              'PFE','MRNA','BIIB','ILMN','IQV','CRL','CTLT','IQVIA','PKI','WAT',
+              'BAX','EW','HOLX','TRMB','IDXX','IDEXX','MTD','A','DXCM','PODD',
           ]
+
+          WATCHLIST = list(dict.fromkeys(WATCHLIST))
 
           def send(text):
               r = requests.post(
@@ -90,8 +106,6 @@ jobs:
                       'insider_pct': info.get('heldPercentInsiders'),
                       'short_pct': info.get('shortPercentOfFloat') or 0,
                       'target_price': info.get('targetMeanPrice'),
-                      'analyst_count': info.get('numberOfAnalystOpinions') or 0,
-                      'rec': info.get('recommendationMean'),
                       'desc': (info.get('longBusinessSummary') or '')[:120],
                       'ma50': float(ma50),
                       'ma200': float(ma200),
@@ -181,11 +195,7 @@ jobs:
               if ma50 > ma200: sepa_score += 25
               if pct_from_high <= 0.15: sepa_score += 25
               if rel_vol >= 1.0: sepa_score += 25
-              m = []
-              m.append('MA50>MA200')
-              m.append(str(round(pct_from_high*100)) + '% from High')
-              m.append('EPS +' + str(round(eps_growth*100)) + '%')
-              m.append('RelVol ' + str(round(rel_vol, 1)) + 'x')
+              m = ['MA50>MA200', str(round(pct_from_high*100)) + '% from High', 'EPS +' + str(round(eps_growth*100)) + '%', 'RelVol ' + str(round(rel_vol, 1)) + 'x']
               return {
                   'ticker': d['ticker'], 'name': d['name'],
                   'score': sepa_score, 'price': p,
@@ -204,77 +214,48 @@ jobs:
               insider = d['insider_pct']
               short_pct = d['short_pct']
               target = d['target_price']
-              rec = d['rec']
-              low52 = d['low52']
-              high52 = d['high52']
-              pct_from_low = (p - low52) / low52 if low52 > 0 else 0
-              pct_from_high = (high52 - p) / high52 if high52 > 0 else 1
-              if pe and pe < 20:
-                  score += 20
-                  signals.append('PE ' + str(round(pe, 1)))
-              if pb and pb < 3:
-                  score += 15
-                  signals.append('PB ' + str(round(pb, 1)))
-              if roic and roic >= 0.10:
-                  score += 20
-                  signals.append('ROIC ' + str(round(roic*100)) + '%')
-              if insider and insider >= 0.05:
-                  score += 20
-                  signals.append('Insider ' + str(round(insider*100, 1)) + '%')
-              if short_pct and short_pct >= 0.05:
-                  score += 10
-                  signals.append('Short ' + str(round(short_pct*100, 1)) + '%')
-              if target and p > 0 and (target - p) / p >= 0.15:
-                  score += 15
-                  signals.append('Target +' + str(round((target-p)/p*100)) + '%')
+              if pe and pe < 20: score += 20; signals.append('PE ' + str(round(pe, 1)))
+              if pb and pb < 3: score += 15; signals.append('PB ' + str(round(pb, 1)))
+              if roic and roic >= 0.10: score += 20; signals.append('ROIC ' + str(round(roic*100)) + '%')
+              if insider and insider >= 0.05: score += 20; signals.append('Insider ' + str(round(insider*100, 1)) + '%')
+              if short_pct and short_pct >= 0.05: score += 10; signals.append('Short ' + str(round(short_pct*100, 1)) + '%')
+              if target and p > 0 and (target - p) / p >= 0.15: score += 15; signals.append('Target +' + str(round((target-p)/p*100)) + '%')
               if score < 50: return None
               upside = ((target - p) / p * 100) if target and p > 0 else 0
               return {
                   'ticker': d['ticker'], 'name': d['name'],
-                  'score': score, 'price': p,
-                  'upside': upside,
-                  'metrics': ' / '.join(signals),
-                  'desc': d['desc'],
-                  'pct_from_low': pct_from_low,
+                  'score': score, 'price': p, 'upside': upside,
+                  'metrics': ' / '.join(signals), 'desc': d['desc'],
               }
 
           def fmt(rank, s, prefix=''):
               emoji = '🟢' if 'BUY' in s['status'] else '🟡'
-              lines = [
-                  '',
-                  '#' + str(rank) + ' ' + prefix + s['ticker'] + ' - ' + s['name'],
+              lines = ['', '#' + str(rank) + ' ' + prefix + s['ticker'] + ' - ' + s['name'],
                   '  Quality: ' + str(s['score']) + '/100 | ' + emoji + ' ' + s['status'],
                   '  Price: $' + str(round(s['price'], 2)) + ' | Fair: $' + str(round(s['fair'], 2)) + ' (' + str(round(s['disc'])) + '%) | Buy: $' + str(round(s['buy'], 2)),
-                  '  ' + s['metrics'],
-              ]
+                  '  ' + s['metrics']]
               if s['desc']: lines.append('  ' + s['desc'])
               return '\n'.join(lines)
 
           def fmt_mini(rank, s):
-              lines = [
-                  '',
-                  '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
+              lines = ['', '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
                   '  SEPA Score: ' + str(s['score']) + '/100',
                   '  Price: $' + str(round(s['price'], 2)) + ' | MA50: $' + str(round(s['ma50'], 2)) + ' | 52W High: $' + str(round(s['high52'], 2)),
-                  '  ' + s['metrics'],
-              ]
+                  '  ' + s['metrics']]
               if s['desc']: lines.append('  ' + s['desc'])
               return '\n'.join(lines)
 
           def fmt_rerate(rank, s):
               upside_str = ('+' + str(round(s['upside'])) + '% to target') if s['upside'] > 0 else ''
-              lines = [
-                  '',
-                  '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
+              lines = ['', '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
                   '  Re-rating Score: ' + str(s['score']) + '/100',
                   '  Price: $' + str(round(s['price'], 2)) + (' | ' + upside_str if upside_str else ''),
-                  '  ' + s['metrics'],
-              ]
+                  '  ' + s['metrics']]
               if s['desc']: lines.append('  ' + s['desc'])
               return '\n'.join(lines)
 
           def main():
-              print('Scanning...')
+              print('Scanning ' + str(len(WATCHLIST)) + ' tickers...')
               buf, lyn, slp, mini, rr = [], [], [], [], []
               for ticker in WATCHLIST:
                   d = fetch(ticker)
@@ -294,7 +275,7 @@ jobs:
               mini.sort(key=lambda x: (-x['score'], x['pct_from_high']))
               rr.sort(key=lambda x: (-x['score'], -x['upside']))
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-              send('<b>Daily Scan - ' + today + '</b>\n🟢 BUY ZONE | 🟡 WATCH | 📈 SEPA | 🔄 RE-RATING\nVerify before investing.')
+              send('<b>Daily Scan - ' + today + '</b>\n🟢 BUY ZONE | 🟡 WATCH | 📈 SEPA | 🔄 RE-RATING\nScanned ' + str(len(WATCHLIST)) + ' stocks | Verify before investing.')
               if buf:
                   send('<b>WARREN BUFFETT Style</b>\n(Fair=EPS x 22 / Buy=Fair x 0.85)' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
               if lyn:
@@ -306,7 +287,7 @@ jobs:
               else:
                   send('<b>MINERVINI SEPA Style</b>\nNo stocks passing SEPA criteria today.')
               if rr:
-                  send('<b>RE-RATING Scanner</b>\n(Greenblatt + Marks: Low PE/PB + High ROIC + Insider Buy + Analyst Upside)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
+                  send('<b>RE-RATING Scanner</b>\n(Low PE/PB + High ROIC + Insider Buy + Analyst Upside)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
               else:
                   send('<b>RE-RATING Scanner</b>\nNo stocks passing re-rating criteria today.')
               print('Done.')
