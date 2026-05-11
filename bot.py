@@ -21,13 +21,13 @@ WATCHLIST = [
 ]
 
 def send(text):
-r = requests.post(
-‘https://api.telegram.org/bot’ + BOT_TOKEN + ‘/sendMessage’,
-json={‘chat_id’: CHAT_ID, ‘text’: text, ‘parse_mode’: ‘HTML’},
-timeout=15,
-)
-r.raise_for_status()
-time.sleep(0.5)
+    r = requests.post(
+    ‘https://api.telegram.org/bot’ + BOT_TOKEN + ‘/sendMessage’,
+    json={‘chat_id’: CHAT_ID, ‘text’: text, ‘parse_mode’: ‘HTML’},
+    timeout=15,
+    )
+    r.raise_for_status()
+    time.sleep(0.5)
 
 def fetch(ticker):
 try:
