@@ -192,7 +192,7 @@ if not buf and not lyn and not slp:
     send('VI Daily Scan - No stocks in BUY/WATCH zone today.')
 
 print('Done.')
-```
 
-if **name** == ‘**main**’:
+
+if __name__ == '__main__':
 main()
