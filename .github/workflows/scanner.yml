@@ -54,10 +54,21 @@ jobs:
           def fetch(ticker):
               try:
                   session = cffi_requests.Session(impersonate='chrome')
-                  info = yf.Ticker(ticker, session=session).info
+                  t = yf.Ticker(ticker, session=session)
+                  info = t.info
                   price = info.get('currentPrice') or info.get('regularMarketPrice')
                   if not price:
                       return None
+                  hist = t.history(period='1y')
+                  if hist.empty or len(hist) < 50:
+                      return None
+                  closes = hist['Close']
+                  volumes = hist['Volume']
+                  ma50  = closes[-50:].mean()
+                  ma200 = closes[-200:].mean() if len(closes) >= 200 else closes.mean()
+                  high52 = closes.max()
+                  avg_vol = volumes[-20:].mean()
+                  last_vol = volumes[-1]
                   return {
                       'ticker': ticker,
                       'name': info.get('shortName', ticker),
@@ -74,6 +85,11 @@ jobs:
                       'peg': info.get('pegRatio'),
                       'insider_pct': info.get('heldPercentInsiders'),
                       'desc': (info.get('longBusinessSummary') or '')[:120],
+                      'ma50': float(ma50),
+                      'ma200': float(ma200),
+                      'high52': float(high52),
+                      'rel_vol': float(last_vol / avg_vol) if avg_vol > 0 else 0,
+                      'eps_growth': info.get('earningsGrowth') or 0,
                   }
               except Exception as e:
                   print(ticker + ' error: ' + str(e))
@@ -137,6 +153,43 @@ jobs:
               if d['insider_pct']: m.append('Insider ' + str(round(d['insider_pct']*100, 1)) + '%')
               return make_row(d, fair, buy, gap, ' / '.join(m))
 
+          def minervini(d):
+              p = d['price']
+              ma50 = d['ma50']
+              ma200 = d['ma200']
+              high52 = d['high52']
+              rel_vol = d['rel_vol']
+              eps_growth = d['eps_growth']
+              if p <= ma50: return None
+              if p <= ma200: return None
+              if ma50 <= ma200: return None
+              if high52 <= 0: return None
+              pct_from_high = (high52 - p) / high52
+              if pct_from_high > 0.25: return None
+              if eps_growth < 0.20: return None
+              sepa_score = 0
+              if p > ma50: sepa_score += 25
+              if ma50 > ma200: sepa_score += 25
+              if pct_from_high <= 0.15: sepa_score += 25
+              if rel_vol >= 1.0: sepa_score += 25
+              m = []
+              m.append('MA50>' + 'MA200')
+              m.append(str(round(pct_from_high*100)) + '% from High')
+              m.append('EPS +' + str(round(eps_growth*100)) + '%')
+              m.append('RelVol ' + str(round(rel_vol, 1)) + 'x')
+              return {
+                  'ticker': d['ticker'],
+                  'name': d['name'],
+                  'score': sepa_score,
+                  'price': p,
+                  'ma50': ma50,
+                  'ma200': ma200,
+                  'high52': high52,
+                  'metrics': ' / '.join(m),
+                  'desc': d['desc'],
+                  'pct_from_high': pct_from_high,
+              }
+
           def fmt(rank, s, prefix=''):
               emoji = '🟢' if 'BUY' in s['status'] else '🟡'
               lines = [
@@ -149,9 +202,20 @@ jobs:
               if s['desc']: lines.append('  ' + s['desc'])
               return '\n'.join(lines)
 
+          def fmt_mini(rank, s):
+              lines = [
+                  '',
+                  '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
+                  '  SEPA Score: ' + str(s['score']) + '/100',
+                  '  Price: $' + str(round(s['price'], 2)) + ' | MA50: $' + str(round(s['ma50'], 2)) + ' | 52W High: $' + str(round(s['high52'], 2)),
+                  '  ' + s['metrics'],
+              ]
+              if s['desc']: lines.append('  ' + s['desc'])
+              return '\n'.join(lines)
+
           def main():
               print('Scanning...')
-              buf, lyn, slp = [], [], []
+              buf, lyn, slp, mini = [], [], [], []
               for ticker in WATCHLIST:
                   d = fetch(ticker)
                   if not d: continue
@@ -161,18 +225,23 @@ jobs:
                   if r: lyn.append(r)
                   r = sleep_scan(d)
                   if r: slp.append(r)
+                  r = minervini(d)
+                  if r: mini.append(r)
               key = lambda x: (x['gap'], -x['score'])
               buf.sort(key=key); lyn.sort(key=key); slp.sort(key=key)
+              mini.sort(key=lambda x: (-x['score'], x['pct_from_high']))
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-              send('<b>VI Daily Scan - ' + today + '</b>\n🟢 BUY ZONE = price below buy\n🟡 WATCH = within 10% above buy\nVerify before investing.')
+              send('<b>VI + Momentum Daily Scan - ' + today + '</b>\n🟢 BUY ZONE = price below buy\n🟡 WATCH = within 10% above buy\n📈 SEPA = Minervini Trend Template\nVerify before investing.')
               if buf:
                   send('<b>WARREN BUFFETT Style</b>\n(Fair=EPS x 22 / Buy=Fair x 0.85)' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
               if lyn:
                   send('<b>PETER LYNCH Style</b>\n(Fair=EPS x Growth / Buy=Fair x 0.95)' + ''.join(fmt(i+1, s, 'Fast Grower: ') for i, s in enumerate(lyn[:TOP_N])))
               if slp:
                   send('<b>NICK SLEEP Style</b>\n(Fair=FCF/0.04 / Buy=Fair x 0.90)' + ''.join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N])))
-              if not buf and not lyn and not slp:
-                  send('VI Daily Scan - No stocks in BUY/WATCH zone today.')
+              if mini:
+                  send('<b>MINERVINI SEPA Style</b>\n(Price>MA50>MA200 / Near 52W High / EPS>20%)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
+              else:
+                  send('<b>MINERVINI SEPA Style</b>\nNo stocks passing SEPA criteria today.')
               print('Done.')
 
           main()
