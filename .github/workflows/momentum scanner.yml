@@ -1,0 +1,323 @@
+name: Momentum & Short Squeeze Scanner
+
+on:
+  schedule:
+    - cron: '0 0 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance requests pytz curl_cffi
+
+      - name: Write momentum_bot.py
+        run: |
+          cat > momentum_bot.py << 'PYEOF'
+          import os, time, requests, yfinance as yf, pytz
+          from curl_cffi import requests as cffi_requests
+          from datetime import datetime
+
+          BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
+          CHAT_ID   = os.environ['TELEGRAM_CHAT_ID']
+          TIMEZONE  = 'Asia/Bangkok'
+          TOP_N     = 5
+
+          # Small/Micro cap hot narrative stocks
+          # AI Power / Clean Energy / Hydrogen / Nuclear / Data Center
+          WATCHLIST = [
+              # Fuel Cell / Hydrogen
+              'FCEL','PLUG','BE','BLDP','HYMC','HTOO',
+              # Nuclear / Power
+              'SMR','OKLO','NNE','CEG','VST','ETR','PCG',
+              # AI Infrastructure / Data Center Power
+              'GFAI','AMPG','ACMR','AIOT','SASI',
+              # Clean Energy Small Cap
+              'ELTK','AMPE','MVST','CBAT','NKLA',
+              # Solar / Wind
+              'ARRY','NOVA','SHLS','STEM','REGI',
+              # Battery / Storage
+              'FREYR','ENVX','ASTS','ACHR','JOBY',
+              # General momentum small cap
+              'IONQ','QBTS','QUBT','RGTI','ARQQ',
+              'BBAI','SOUN','AIXI','PRCT','APLD',
+              'SMCI','COHR','VRT','GTLB','PATH',
+          ]
+
+          WATCHLIST = list(dict.fromkeys(WATCHLIST))
+
+          def send(text):
+              r = requests.post(
+                  'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                  json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
+                  timeout=15,
+              )
+              r.raise_for_status()
+              time.sleep(0.5)
+
+          def fetch(ticker):
+              try:
+                  session = cffi_requests.Session(impersonate='chrome')
+                  t = yf.Ticker(ticker, session=session)
+                  info = t.info
+                  price = info.get('currentPrice') or info.get('regularMarketPrice')
+                  if not price or price <= 0:
+                      return None
+                  hist = t.history(period='1y')
+                  if hist.empty or len(hist) < 20:
+                      return None
+                  closes = hist['Close']
+                  volumes = hist['Volume']
+                  high52  = closes.max()
+                  low52   = closes.min()
+                  ma20    = closes[-20:].mean()
+                  ma50    = closes[-50:].mean() if len(closes) >= 50 else closes.mean()
+                  avg_vol_20 = volumes[-20:].mean()
+                  avg_vol_5  = volumes[-5:].mean()
+                  last_vol   = volumes[-1]
+                  ret_1w  = (closes[-1] - closes[-6]) / closes[-6] if len(closes) >= 6 else 0
+                  ret_1m  = (closes[-1] - closes[-22]) / closes[-22] if len(closes) >= 22 else 0
+                  ret_3m  = (closes[-1] - closes[-66]) / closes[-66] if len(closes) >= 66 else 0
+                  mktcap = info.get('marketCap') or 0
+                  return {
+                      'ticker':      ticker,
+                      'name':        info.get('shortName', ticker),
+                      'price':       float(price),
+                      'mktcap':      mktcap,
+                      'high52':      float(high52),
+                      'low52':       float(low52),
+                      'ma20':        float(ma20),
+                      'ma50':        float(ma50),
+                      'avg_vol_20':  float(avg_vol_20),
+                      'avg_vol_5':   float(avg_vol_5),
+                      'last_vol':    float(last_vol),
+                      'rel_vol':     float(last_vol / avg_vol_20) if avg_vol_20 > 0 else 0,
+                      'vol_surge':   float(avg_vol_5 / avg_vol_20) if avg_vol_20 > 0 else 0,
+                      'ret_1w':      float(ret_1w),
+                      'ret_1m':      float(ret_1m),
+                      'ret_3m':      float(ret_3m),
+                      'short_pct':   info.get('shortPercentOfFloat') or 0,
+                      'short_ratio': info.get('shortRatio') or 0,
+                      'pct_from_low': (float(price) - float(low52)) / float(low52) if low52 > 0 else 0,
+                      'pct_from_high': (float(high52) - float(price)) / float(high52) if high52 > 0 else 0,
+                      'beta':        info.get('beta') or 1,
+                      'sector':      info.get('sector', ''),
+                      'desc':        (info.get('longBusinessSummary') or '')[:100],
+                  }
+              except Exception as e:
+                  print(ticker + ' error: ' + str(e))
+                  return None
+
+          def squeeze_score(d):
+              score = 0
+              signals = []
+
+              # Short squeeze setup
+              if d['short_pct'] >= 0.15:
+                  score += 25
+                  signals.append('Short ' + str(round(d['short_pct']*100, 1)) + '%')
+              elif d['short_pct'] >= 0.08:
+                  score += 15
+                  signals.append('Short ' + str(round(d['short_pct']*100, 1)) + '%')
+
+              # Days to cover
+              if d['short_ratio'] >= 5:
+                  score += 20
+                  signals.append('DTC ' + str(round(d['short_ratio'], 1)) + 'd')
+              elif d['short_ratio'] >= 3:
+                  score += 10
+                  signals.append('DTC ' + str(round(d['short_ratio'], 1)) + 'd')
+
+              # Volume surge (5d vs 20d avg)
+              if d['vol_surge'] >= 3.0:
+                  score += 25
+                  signals.append('VolSurge ' + str(round(d['vol_surge'], 1)) + 'x')
+              elif d['vol_surge'] >= 2.0:
+                  score += 15
+                  signals.append('VolSurge ' + str(round(d['vol_surge'], 1)) + 'x')
+
+              # Price momentum
+              if d['ret_1w'] >= 0.20:
+                  score += 15
+                  signals.append('1W +' + str(round(d['ret_1w']*100)) + '%')
+              elif d['ret_1w'] >= 0.10:
+                  score += 8
+                  signals.append('1W +' + str(round(d['ret_1w']*100)) + '%')
+
+              # Above MA20 (trend confirmation)
+              if d['price'] > d['ma20']:
+                  score += 10
+                  signals.append('Above MA20')
+
+              # Near 52W low (early stage breakout)
+              if d['pct_from_low'] <= 0.50:
+                  score += 5
+                  signals.append('Low+' + str(round(d['pct_from_low']*100)) + '%')
+
+              if score < 40:
+                  return None
+
+              return {
+                  'ticker':   d['ticker'],
+                  'name':     d['name'],
+                  'score':    score,
+                  'price':    d['price'],
+                  'mktcap':   d['mktcap'],
+                  'metrics':  ' / '.join(signals),
+                  'ret_1w':   d['ret_1w'],
+                  'ret_1m':   d['ret_1m'],
+                  'short_pct': d['short_pct'],
+                  'vol_surge': d['vol_surge'],
+                  'desc':     d['desc'],
+              }
+
+          def breakout_score(d):
+              score = 0
+              signals = []
+
+              # Near 52W high breakout
+              if d['pct_from_high'] <= 0.05:
+                  score += 30
+                  signals.append('Near 52W High')
+              elif d['pct_from_high'] <= 0.10:
+                  score += 20
+                  signals.append(str(round(d['pct_from_high']*100)) + '% from High')
+
+              # Volume surge
+              if d['vol_surge'] >= 2.5:
+                  score += 25
+                  signals.append('VolSurge ' + str(round(d['vol_surge'], 1)) + 'x')
+              elif d['vol_surge'] >= 1.5:
+                  score += 15
+                  signals.append('VolSurge ' + str(round(d['vol_surge'], 1)) + 'x')
+
+              # Strong 1M momentum
+              if d['ret_1m'] >= 0.30:
+                  score += 25
+                  signals.append('1M +' + str(round(d['ret_1m']*100)) + '%')
+              elif d['ret_1m'] >= 0.15:
+                  score += 15
+                  signals.append('1M +' + str(round(d['ret_1m']*100)) + '%')
+
+              # 3M momentum
+              if d['ret_3m'] >= 0.50:
+                  score += 20
+                  signals.append('3M +' + str(round(d['ret_3m']*100)) + '%')
+
+              # Above both MAs
+              if d['price'] > d['ma20'] and d['price'] > d['ma50']:
+                  score += 10
+                  signals.append('MA stack')
+
+              if score < 50:
+                  return None
+
+              return {
+                  'ticker':   d['ticker'],
+                  'name':     d['name'],
+                  'score':    score,
+                  'price':    d['price'],
+                  'mktcap':   d['mktcap'],
+                  'metrics':  ' / '.join(signals),
+                  'ret_1m':   d['ret_1m'],
+                  'ret_3m':   d['ret_3m'],
+                  'vol_surge': d['vol_surge'],
+                  'pct_from_high': d['pct_from_high'],
+                  'desc':     d['desc'],
+              }
+
+          def fmt_cap(mktcap):
+              if mktcap >= 1e9:
+                  return str(round(mktcap/1e9, 1)) + 'B'
+              elif mktcap >= 1e6:
+                  return str(round(mktcap/1e6)) + 'M'
+              return 'N/A'
+
+          def fmt_squeeze(rank, s):
+              lines = [
+                  '',
+                  '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
+                  '  Score: ' + str(s['score']) + '/100 | Cap: ' + fmt_cap(s['mktcap']),
+                  '  Price: $' + str(round(s['price'], 2)) + ' | 1W: ' + ('+' if s['ret_1w'] >= 0 else '') + str(round(s['ret_1w']*100, 1)) + '%',
+                  '  ' + s['metrics'],
+              ]
+              if s['desc']: lines.append('  ' + s['desc'])
+              return '\n'.join(lines)
+
+          def fmt_breakout(rank, s):
+              lines = [
+                  '',
+                  '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
+                  '  Score: ' + str(s['score']) + '/100 | Cap: ' + fmt_cap(s['mktcap']),
+                  '  Price: $' + str(round(s['price'], 2)) + ' | 1M: ' + ('+' if s['ret_1m'] >= 0 else '') + str(round(s['ret_1m']*100, 1)) + '% | 3M: ' + ('+' if s['ret_3m'] >= 0 else '') + str(round(s['ret_3m']*100, 1)) + '%',
+                  '  ' + s['metrics'],
+              ]
+              if s['desc']: lines.append('  ' + s['desc'])
+              return '\n'.join(lines)
+
+          def main():
+              print('Scanning ' + str(len(WATCHLIST)) + ' momentum tickers...')
+              squeeze_list = []
+              breakout_list = []
+
+              for ticker in WATCHLIST:
+                  d = fetch(ticker)
+                  if not d: continue
+
+                  r = squeeze_score(d)
+                  if r: squeeze_list.append(r)
+
+                  r = breakout_score(d)
+                  if r: breakout_list.append(r)
+
+              squeeze_list.sort(key=lambda x: -x['score'])
+              breakout_list.sort(key=lambda x: -x['score'])
+
+              today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
+
+              send(
+                  '<b>Momentum Scanner - ' + today + '</b>\n'
+                  '🔥 SHORT SQUEEZE = High short + Volume surge\n'
+                  '🚀 BREAKOUT = Near 52W High + Volume + Momentum\n'
+                  'Small/Micro cap high risk — verify before trading.'
+              )
+
+              if squeeze_list:
+                  send(
+                      '<b>🔥 SHORT SQUEEZE Setup</b>\n'
+                      '(High Short Interest + Volume Surge + Price Momentum)'
+                      + ''.join(fmt_squeeze(i+1, s) for i, s in enumerate(squeeze_list[:TOP_N]))
+                  )
+              else:
+                  send('<b>🔥 SHORT SQUEEZE Setup</b>\nNo setups today.')
+
+              if breakout_list:
+                  send(
+                      '<b>🚀 BREAKOUT Momentum</b>\n'
+                      '(Near 52W High + Volume Surge + Strong 1M/3M Return)'
+                      + ''.join(fmt_breakout(i+1, s) for i, s in enumerate(breakout_list[:TOP_N]))
+                  )
+              else:
+                  send('<b>🚀 BREAKOUT Momentum</b>\nNo breakouts today.')
+
+              print('Done.')
+
+          main()
+          PYEOF
+
+      - name: Run momentum scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python momentum_bot.py
