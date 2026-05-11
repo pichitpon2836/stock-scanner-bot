@@ -8,7 +8,7 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -67,6 +67,7 @@ jobs:
                   ma50  = closes[-50:].mean()
                   ma200 = closes[-200:].mean() if len(closes) >= 200 else closes.mean()
                   high52 = closes.max()
+                  low52  = closes.min()
                   avg_vol = volumes[-20:].mean()
                   last_vol = volumes[-1]
                   return {
@@ -80,14 +81,22 @@ jobs:
                       'fcf': info.get('freeCashflow'),
                       'shares': info.get('sharesOutstanding'),
                       'roe': info.get('returnOnEquity'),
+                      'roic': info.get('returnOnAssets'),
                       'net_margin': info.get('profitMargins'),
                       'gross_margin': info.get('grossMargins'),
                       'peg': info.get('pegRatio'),
+                      'pe': info.get('forwardPE') or info.get('trailingPE'),
+                      'pb': info.get('priceToBook'),
                       'insider_pct': info.get('heldPercentInsiders'),
+                      'short_pct': info.get('shortPercentOfFloat') or 0,
+                      'target_price': info.get('targetMeanPrice'),
+                      'analyst_count': info.get('numberOfAnalystOpinions') or 0,
+                      'rec': info.get('recommendationMean'),
                       'desc': (info.get('longBusinessSummary') or '')[:120],
                       'ma50': float(ma50),
                       'ma200': float(ma200),
                       'high52': float(high52),
+                      'low52': float(low52),
                       'rel_vol': float(last_vol / avg_vol) if avg_vol > 0 else 0,
                       'eps_growth': info.get('earningsGrowth') or 0,
                   }
@@ -173,21 +182,60 @@ jobs:
               if pct_from_high <= 0.15: sepa_score += 25
               if rel_vol >= 1.0: sepa_score += 25
               m = []
-              m.append('MA50>' + 'MA200')
+              m.append('MA50>MA200')
               m.append(str(round(pct_from_high*100)) + '% from High')
               m.append('EPS +' + str(round(eps_growth*100)) + '%')
               m.append('RelVol ' + str(round(rel_vol, 1)) + 'x')
               return {
-                  'ticker': d['ticker'],
-                  'name': d['name'],
-                  'score': sepa_score,
-                  'price': p,
-                  'ma50': ma50,
-                  'ma200': ma200,
-                  'high52': high52,
-                  'metrics': ' / '.join(m),
-                  'desc': d['desc'],
+                  'ticker': d['ticker'], 'name': d['name'],
+                  'score': sepa_score, 'price': p,
+                  'ma50': ma50, 'ma200': ma200, 'high52': high52,
+                  'metrics': ' / '.join(m), 'desc': d['desc'],
                   'pct_from_high': pct_from_high,
+              }
+
+          def rerate(d):
+              score = 0
+              signals = []
+              p = d['price']
+              pe = d['pe']
+              pb = d['pb']
+              roic = d['roic']
+              insider = d['insider_pct']
+              short_pct = d['short_pct']
+              target = d['target_price']
+              rec = d['rec']
+              low52 = d['low52']
+              high52 = d['high52']
+              pct_from_low = (p - low52) / low52 if low52 > 0 else 0
+              pct_from_high = (high52 - p) / high52 if high52 > 0 else 1
+              if pe and pe < 20:
+                  score += 20
+                  signals.append('PE ' + str(round(pe, 1)))
+              if pb and pb < 3:
+                  score += 15
+                  signals.append('PB ' + str(round(pb, 1)))
+              if roic and roic >= 0.10:
+                  score += 20
+                  signals.append('ROIC ' + str(round(roic*100)) + '%')
+              if insider and insider >= 0.05:
+                  score += 20
+                  signals.append('Insider ' + str(round(insider*100, 1)) + '%')
+              if short_pct and short_pct >= 0.05:
+                  score += 10
+                  signals.append('Short ' + str(round(short_pct*100, 1)) + '%')
+              if target and p > 0 and (target - p) / p >= 0.15:
+                  score += 15
+                  signals.append('Target +' + str(round((target-p)/p*100)) + '%')
+              if score < 50: return None
+              upside = ((target - p) / p * 100) if target and p > 0 else 0
+              return {
+                  'ticker': d['ticker'], 'name': d['name'],
+                  'score': score, 'price': p,
+                  'upside': upside,
+                  'metrics': ' / '.join(signals),
+                  'desc': d['desc'],
+                  'pct_from_low': pct_from_low,
               }
 
           def fmt(rank, s, prefix=''):
@@ -213,9 +261,21 @@ jobs:
               if s['desc']: lines.append('  ' + s['desc'])
               return '\n'.join(lines)
 
+          def fmt_rerate(rank, s):
+              upside_str = ('+' + str(round(s['upside'])) + '% to target') if s['upside'] > 0 else ''
+              lines = [
+                  '',
+                  '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
+                  '  Re-rating Score: ' + str(s['score']) + '/100',
+                  '  Price: $' + str(round(s['price'], 2)) + (' | ' + upside_str if upside_str else ''),
+                  '  ' + s['metrics'],
+              ]
+              if s['desc']: lines.append('  ' + s['desc'])
+              return '\n'.join(lines)
+
           def main():
               print('Scanning...')
-              buf, lyn, slp, mini = [], [], [], []
+              buf, lyn, slp, mini, rr = [], [], [], [], []
               for ticker in WATCHLIST:
                   d = fetch(ticker)
                   if not d: continue
@@ -227,11 +287,14 @@ jobs:
                   if r: slp.append(r)
                   r = minervini(d)
                   if r: mini.append(r)
+                  r = rerate(d)
+                  if r: rr.append(r)
               key = lambda x: (x['gap'], -x['score'])
               buf.sort(key=key); lyn.sort(key=key); slp.sort(key=key)
               mini.sort(key=lambda x: (-x['score'], x['pct_from_high']))
+              rr.sort(key=lambda x: (-x['score'], -x['upside']))
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-              send('<b>VI + Momentum Daily Scan - ' + today + '</b>\n🟢 BUY ZONE = price below buy\n🟡 WATCH = within 10% above buy\n📈 SEPA = Minervini Trend Template\nVerify before investing.')
+              send('<b>Daily Scan - ' + today + '</b>\n🟢 BUY ZONE | 🟡 WATCH | 📈 SEPA | 🔄 RE-RATING\nVerify before investing.')
               if buf:
                   send('<b>WARREN BUFFETT Style</b>\n(Fair=EPS x 22 / Buy=Fair x 0.85)' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
               if lyn:
@@ -242,6 +305,10 @@ jobs:
                   send('<b>MINERVINI SEPA Style</b>\n(Price>MA50>MA200 / Near 52W High / EPS>20%)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
               else:
                   send('<b>MINERVINI SEPA Style</b>\nNo stocks passing SEPA criteria today.')
+              if rr:
+                  send('<b>RE-RATING Scanner</b>\n(Greenblatt + Marks: Low PE/PB + High ROIC + Insider Buy + Analyst Upside)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
+              else:
+                  send('<b>RE-RATING Scanner</b>\nNo stocks passing re-rating criteria today.')
               print('Done.')
 
           main()
