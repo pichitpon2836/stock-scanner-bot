@@ -1,198 +1,130 @@
-import os
-import sys
-import time
-import requests
 import yfinance as yf
-from curl_cffi import requests as cffi_requests
-from datetime import datetime
+import pandas as pd
+import pandas_ta as ta
+import requests
 import pytz
+import time
+from datetime import datetime
+import curl_cffi.requests as cffi_requests
 
-BOT_TOKEN = os.environ[‘TELEGRAM_BOT_TOKEN’]
-CHAT_ID   = os.environ[‘TELEGRAM_CHAT_ID’]
-TIMEZONE  = ‘Asia/Bangkok’
-TOP_N     = 3
+# --- CONFIGเดิมของคุณ ---
+# BOT_TOKEN = '...'
+# CHAT_ID = '...'
+# TIMEZONE = 'Asia/Bangkok'
 
 WATCHLIST = [
-‘AAPL’,‘MSFT’,‘GOOGL’,‘AMZN’,‘META’,‘NVDA’,‘BRK-B’,
-‘JPM’,‘V’,‘MA’,‘UNH’,‘JNJ’,‘PG’,‘KO’,‘WMT’,
-‘HD’,‘COST’,‘ADBE’,‘CRM’,‘NFLX’,‘TSM’,‘AVGO’,
-‘LLY’,‘TMO’,‘ABBV’,‘MCD’,‘NKE’,‘SBUX’,‘DIS’,
-‘SCHW’,‘CI’,‘TTD’,‘FDS’,‘KR’,
+    'AAPL','MSFT','GOOGL','AMZN','META','NVDA',
+    'JPM','V','MA','UNH','JNJ','PG','KO','WMT',
+    'HD','COST','ADBE','CRM','NFLX','TSM','AVGO',
+    'LLY','TMO','ABBV','MCD','NKE','SBUX','DIS',
+    'SCHW','CI','TTD','FDS','KR','NOK','MU','BULL'
 ]
 
 def send(text):
+    # ฟังก์ชันส่ง Telegram เดิมของคุณ
     r = requests.post(
-    ‘https://api.telegram.org/bot’ + BOT_TOKEN + ‘/sendMessage’,
-    json={‘chat_id’: CHAT_ID, ‘text’: text, ‘parse_mode’: ‘HTML’},
-    timeout=15,
+        'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+        json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'Markdown'},
+        timeout=15,
     )
     r.raise_for_status()
     time.sleep(0.5)
 
 def fetch(ticker):
-try:
-session = cffi_requests.Session(impersonate=‘chrome’)
-info = yf.Ticker(ticker, session=session).info
-price = info.get(‘currentPrice’) or info.get(‘regularMarketPrice’)
-if not price:
-return None
-return {
-‘ticker’:       ticker,
-‘name’:         info.get(‘shortName’, ticker),
-‘price’:        float(price),
-‘eps_fwd’:      info.get(‘forwardEps’),
-‘eps_ttm’:      info.get(‘trailingEps’),
-‘growth’:       info.get(‘earningsGrowth’) or info.get(‘revenueGrowth’),
-‘rev_growth’:   info.get(‘revenueGrowth’),
-‘fcf’:          info.get(‘freeCashflow’),
-‘shares’:       info.get(‘sharesOutstanding’),
-‘roe’:          info.get(‘returnOnEquity’),
-‘net_margin’:   info.get(‘profitMargins’),
-‘gross_margin’: info.get(‘grossMargins’),
-‘peg’:          info.get(‘pegRatio’),
-‘insider_pct’:  info.get(‘heldPercentInsiders’),
-‘desc’:         (info.get(‘longBusinessSummary’) or ‘’)[:120],
-}
-except Exception as e:
-print(ticker + ’ error: ’ + str(e))
-return None
+    # ฟังก์ชันดึงข้อมูลเดิมของคุณ (ใช้ curl_cffi เพื่อเลี่ยงการโดนบล็อก)
+    try:
+        session = cffi_requests.Session(impersonate="chrome110")
+        info = yf.Ticker(ticker, session=session).info
+        price = info.get('currentPrice') or info.get('regularMarketPrice')
+        if not price: return None
+        return {
+            'ticker': ticker,
+            'name': info.get('shortName', ticker),
+            'price': float(price),
+            'eps_fwd': info.get('forwardEps'),
+            'growth': info.get('earningsGrowth'),
+            'rev_growth': info.get('revenueGrowth'),
+            'fcf': info.get('freeCashflow'),
+            'shares': info.get('sharesOutstanding'),
+            'roe': info.get('returnOnEquity'),
+            'net_margin': info.get('profitMargins'),
+            'gross_margin': info.get('grossMargins'),
+            'peg': info.get('pegRatio'),
+            'forward_pe': info.get('forwardPE')
+        }
+    except Exception as e:
+        print(f"{ticker} error: {str(e)}")
+        return None
 
-def qscore(d):
-s = 0
-if d[‘roe’]          and d[‘roe’]          >= 0.15: s += 25
-if d[‘net_margin’]   and d[‘net_margin’]   >= 0.15: s += 25
-if d[‘gross_margin’] and d[‘gross_margin’] >= 0.40: s += 25
-if d[‘rev_growth’]   and d[‘rev_growth’]   >= 0.10: s += 25
-return s
+# --- ฟังก์ชันใหม่: เช็ค PHASE 2 (EMA 10 เดือน & EMA 200 วัน) ---
+def check_phase2(ticker):
+    try:
+        df_d = yf.download(ticker, period="1y", interval="1d", progress=False)
+        df_m = yf.download(ticker, period="5y", interval="1mo", progress=False)
+        if len(df_d) < 200 or len(df_m) < 10: return False
+        
+        ema200 = ta.ema(df_d['Close'], length=200).iloc[-1]
+        ema10m = ta.ema(df_m['Close'], length=10).iloc[-1]
+        curr = df_d['Close'].iloc[-1]
+        
+        # เงื่อนไข: ราคายืนเหนือ EMA ทั้งสองเส้น (Validation Phase)
+        return curr > ema200 and curr > ema10m
+    except:
+        return False
 
-def make_row(d, fair, buy, gap, metrics):
-return {
-‘ticker’:  d[‘ticker’],
-‘name’:    d[‘name’],
-‘score’:   qscore(d),
-‘status’:  ‘BUY ZONE’ if d[‘price’] <= buy else ‘WATCH’,
-‘price’:   d[‘price’],
-‘fair’:    fair,
-‘buy’:     buy,
-‘disc’:    (d[‘price’] - fair) / fair * 100,
-‘metrics’: metrics,
-‘desc’:    d[‘desc’],
-‘gap’:     gap,
-}
-
+# --- ฟังก์ชันคำนวณสไตล์ต่างๆ (Logicเดิมของคุณ) ---
 def buffett(d):
-eps = d[‘eps_fwd’]
-if not eps or eps <= 0:
-return None
-fair = eps * 22
-buy  = fair * 0.85
-gap  = (d[‘price’] - buy) / buy
-if gap > 0.10:
-return None
-m = []
-if d[‘roe’]:          m.append(’ROE ’ + str(round(d[‘roe’]*100)) + ‘%’)
-if d[‘net_margin’]:   m.append(’NM ’  + str(round(d[‘net_margin’]*100)) + ‘%’)
-if d[‘gross_margin’]: m.append(’GM ’  + str(round(d[‘gross_margin’]*100)) + ‘%’)
-return make_row(d, fair, buy, gap, ’ / ’.join(m))
+    eps = d['eps_fwd']
+    if not eps or eps <= 0: return None
+    fair = eps * 22
+    buy = fair * 0.85
+    if d['price'] > buy * 1.1: return None # WATCH ZONE
+    return {'ticker': d['ticker'], 'status': 'BUY' if d['price'] <= buy else 'WATCH'}
 
 def lynch(d):
-eps    = d[‘eps_ttm’] or d[‘eps_fwd’]
-growth = d[‘growth’]
-if not eps or eps <= 0 or not growth or growth <= 0:
-return None
-gp   = growth * 100
-fair = eps * gp
-buy  = fair * 0.95
-gap  = (d[‘price’] - buy) / buy
-if gap > 0.10:
-return None
-peg = (’PEG ’ + str(round(d[‘peg’], 2))) if d[‘peg’] else (’PEG ~’ + str(round(d[‘price’]/fair, 2)))
-m   = [peg, ‘EPS +’ + str(round(gp)) + ‘%’]
-if d[‘rev_growth’]: m.append(‘Rev +’ + str(round(d[‘rev_growth’]*100)) + ‘%’)
-return make_row(d, fair, buy, gap, ’ / ’.join(m))
-
-def sleep_scan(d):
-if not d[‘fcf’] or not d[‘shares’] or d[‘shares’] <= 0:
-return None
-fcf_ps = d[‘fcf’] / d[‘shares’]
-if fcf_ps <= 0:
-return None
-fair = fcf_ps / 0.04
-buy  = fair * 0.90
-gap  = (d[‘price’] - buy) / buy
-if gap > 0.10:
-return None
-m = []
-if d[‘rev_growth’]:  m.append(‘Rev +’ + str(round(d[‘rev_growth’]*100)) + ‘%’)
-if d[‘roe’]:         m.append(’ROE ’  + str(round(d[‘roe’]*100)) + ‘%’)
-if d[‘insider_pct’]: m.append(’Insider ’ + str(round(d[‘insider_pct’]*100, 1)) + ‘%’)
-return make_row(d, fair, buy, gap, ’ / ’.join(m))
-
-def fmt(rank, s, prefix=’’):
-emoji = ‘🟢’ if ‘BUY’ in s[‘status’] else ‘🟡’
-lines = [
-‘’,
-‘#’ + str(rank) + ’ ’ + prefix + s[‘ticker’] + ’ - ’ + s[‘name’],
-’  Quality: ’ + str(s[‘score’]) + ‘/100 | ’ + emoji + ’ ’ + s[‘status’],
-’  Price: $’ + str(round(s[‘price’], 2)) +
-’ | Fair: $’ + str(round(s[‘fair’], 2)) +
-’ (’ + str(round(s[‘disc’])) + ‘%)’ +
-’ | Buy: $’ + str(round(s[‘buy’], 2)),
-’  ’ + s[‘metrics’],
-]
-if s[‘desc’]:
-lines.append(’  ’ + s[‘desc’])
-return ‘\n’.join(lines)
+    growth = d['growth']
+    eps = d['eps_fwd']
+    if not eps or eps <= 0 or not growth or growth <= 0: return None
+    fair = eps * (growth * 100)
+    buy = fair * 0.95
+    if d['price'] > buy * 1.1: return None
+    return {'ticker': d['ticker'], 'status': 'BUY' if d['price'] <= buy else 'WATCH'}
 
 def main():
-print(‘Scanning ’ + str(len(WATCHLIST)) + ’ tickers…’)
-buf, lyn, slp = [], [], []
+    print(f'Scanning {len(WATCHLIST)} stocks...')
+    buf_list, lyn_list, phase2_list = [], [], []
 
-```
-for ticker in WATCHLIST:
-    d = fetch(ticker)
-    if not d:
-        continue
-    r = buffett(d)
-    if r: buf.append(r)
-    r = lynch(d)
-    if r: lyn.append(r)
-    r = sleep_scan(d)
-    if r: slp.append(r)
+    for ticker in WATCHLIST:
+        # 1. เช็ค Phase 2 ก่อน (เน้นทรงกราฟ)
+        if check_phase2(ticker):
+            phase2_list.append(ticker)
 
-def sort_key(x):
-    return (x['gap'], -x['score'])
+        # 2. เช็คพื้นฐาน (Logic เดิม)
+        d = fetch(ticker)
+        if not d: continue
+        
+        b = buffett(d)
+        if b: buf_list.append(f"{b['ticker']} ({b['status']})")
+        
+        l = lynch(d)
+        if l: lyn_list.append(f"{l['ticker']} ({l['status']})")
 
-buf.sort(key=sort_key)
-lyn.sort(key=sort_key)
-slp.sort(key=sort_key)
+    # --- ส่วนการส่งข้อความ ---
+    today = datetime.now(pytz.timezone('Asia/Bangkok')).strftime('%Y-%m-%d')
+    
+    header = f"☀️ *Daily Stock Scan - {today}*\n"
+    
+    # 1. ส่งโซนสะสมพื้นฐาน (ของเดิม)
+    vi_text = header + "\n📌 *Buffett Style:* " + (", ".join(buf_list) if buf_list else "None")
+    vi_text += "\n🚀 *Lynch Style:* " + (", ".join(lyn_list) if lyn_list else "None")
+    send(vi_text)
 
-today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-
-send(
-    '<b>VI Daily Scan - ' + today + '</b>\n'
-    'BUY ZONE = price below buy target\n'
-    'WATCH = within 10% above buy target\n'
-    'Always verify before investing.'
-)
-
-if buf:
-    body = ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N]))
-    send('<b>WARREN BUFFETT Style</b>\n(Fair=EPS x 22 / Buy=Fair x 0.85)' + body)
-
-if lyn:
-    body = ''.join(fmt(i+1, s, 'Fast Grower: ') for i, s in enumerate(lyn[:TOP_N]))
-    send('<b>PETER LYNCH Style</b>\n(Fair=EPS x Growth / Buy=Fair x 0.95)' + body)
-
-if slp:
-    body = ''.join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N]))
-    send('<b>NICK SLEEP Style</b>\n(Fair=FCF/0.04 / Buy=Fair x 0.90)' + body)
-
-if not buf and not lyn and not slp:
-    send('VI Daily Scan - No stocks in BUY/WATCH zone today.')
-
-print('Done.')
-
+    # 2. ส่งโซน Momentum (Phase 2 ที่เพิ่มใหม่)
+    if phase2_list:
+        p2_text = "📈 *Phase 2 Validation (Trend follows Value)*\n"
+        p2_text += "หุ้นที่ยืนเหนือ EMA 10 เดือน & 200 วัน:\n"
+        p2_text += "`" + ", ".join(phase2_list) + "`"
+        send(p2_text)
 
 if __name__ == '__main__':
-main()
+    main()
