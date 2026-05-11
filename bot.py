@@ -7,10 +7,10 @@ import time
 from datetime import datetime
 import curl_cffi.requests as cffi_requests
 
-# --- CONFIGเดิมของคุณ ---
-# BOT_TOKEN = '...'
-# CHAT_ID = '...'
-# TIMEZONE = 'Asia/Bangkok'
+# --- CONFIG ---
+BOT_TOKEN = 'YOUR_BOT_TOKEN'
+CHAT_ID = 'YOUR_CHAT_ID'
+TIMEZONE = 'Asia/Bangkok'
 
 WATCHLIST = [
     'AAPL','MSFT','GOOGL','AMZN','META','NVDA',
@@ -21,17 +21,21 @@ WATCHLIST = [
 ]
 
 def send(text):
-    # ฟังก์ชันส่ง Telegram เดิมของคุณ
-    r = requests.post(
-        'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
-        json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'Markdown'},
-        timeout=15,
-    )
-    r.raise_for_status()
+    # ปรับใช้ HTML parse_mode เพื่อให้รองรับ <b> <i> ตามที่คุณต้องการ
+    url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
+    payload = {
+        'chat_id': CHAT_ID,
+        'text': text,
+        'parse_mode': 'HTML' 
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=15)
+        r.raise_for_status()
+    except Exception as e:
+        print(f"Send Error: {e}")
     time.sleep(0.5)
 
 def fetch(ticker):
-    # ฟังก์ชันดึงข้อมูลเดิมของคุณ (ใช้ curl_cffi เพื่อเลี่ยงการโดนบล็อก)
     try:
         session = cffi_requests.Session(impersonate="chrome110")
         info = yf.Ticker(ticker, session=session).info
@@ -53,32 +57,34 @@ def fetch(ticker):
             'forward_pe': info.get('forwardPE')
         }
     except Exception as e:
-        print(f"{ticker} error: {str(e)}")
+        print(f"{ticker} fetch error: {str(e)}")
         return None
 
-# --- ฟังก์ชันใหม่: เช็ค PHASE 2 (EMA 10 เดือน & EMA 200 วัน) ---
 def check_phase2(ticker):
     try:
-        df_d = yf.download(ticker, period="1y", interval="1d", progress=False)
+        # ดึงข้อมูลย้อนหลัง (เผื่อไว้คำนวณ EMA)
+        df_d = yf.download(ticker, period="2y", interval="1d", progress=False)
         df_m = yf.download(ticker, period="5y", interval="1mo", progress=False)
+        
         if len(df_d) < 200 or len(df_m) < 10: return False
         
-        ema200 = ta.ema(df_d['Close'], length=200).iloc[-1]
-        ema10m = ta.ema(df_m['Close'], length=10).iloc[-1]
-        curr = df_d['Close'].iloc[-1]
+        # คำนวณ EMA โดยใช้ pandas_ta
+        ema200_d = ta.ema(df_d['Close'], length=200).iloc[-1]
+        ema10_m = ta.ema(df_m['Close'], length=10).iloc[-1]
+        current_price = df_d['Close'].iloc[-1]
         
-        # เงื่อนไข: ราคายืนเหนือ EMA ทั้งสองเส้น (Validation Phase)
-        return curr > ema200 and curr > ema10m
-    except:
+        # เงื่อนไข Phase 2: ราคายืนเหนือ EMA ทั้งสองเส้น
+        return current_price > ema200_d and current_price > ema10_m
+    except Exception as e:
+        print(f"{ticker} TA error: {e}")
         return False
 
-# --- ฟังก์ชันคำนวณสไตล์ต่างๆ (Logicเดิมของคุณ) ---
 def buffett(d):
     eps = d['eps_fwd']
     if not eps or eps <= 0: return None
     fair = eps * 22
     buy = fair * 0.85
-    if d['price'] > buy * 1.1: return None # WATCH ZONE
+    if d['price'] > buy * 1.1: return None 
     return {'ticker': d['ticker'], 'status': 'BUY' if d['price'] <= buy else 'WATCH'}
 
 def lynch(d):
@@ -95,11 +101,11 @@ def main():
     buf_list, lyn_list, phase2_list = [], [], []
 
     for ticker in WATCHLIST:
-        # 1. เช็ค Phase 2 ก่อน (เน้นทรงกราฟ)
+        # 1. เช็ค Phase 2 (Technical)
         if check_phase2(ticker):
             phase2_list.append(ticker)
 
-        # 2. เช็คพื้นฐาน (Logic เดิม)
+        # 2. เช็ค Fundamental
         d = fetch(ticker)
         if not d: continue
         
@@ -110,21 +116,25 @@ def main():
         if l: lyn_list.append(f"{l['ticker']} ({l['status']})")
 
     # --- ส่วนการส่งข้อความ ---
-    today = datetime.now(pytz.timezone('Asia/Bangkok')).strftime('%Y-%m-%d')
+    tz = pytz.timezone(TIMEZONE)
+    today = datetime.now(tz).strftime('%Y-%m-%d')
     
-    header = f"☀️ *Daily Stock Scan - {today}*\n"
-    
-    # 1. ส่งโซนสะสมพื้นฐาน (ของเดิม)
-    vi_text = header + "\n📌 *Buffett Style:* " + (", ".join(buf_list) if buf_list else "None")
-    vi_text += "\n🚀 *Lynch Style:* " + (", ".join(lyn_list) if lyn_list else "None")
-    send(vi_text)
+    # 1. ส่งผลลัพธ์สไตล์ VI
+    vi_header = f"<b>☀️ Daily Stock Scan - {today}</b>\n"
+    vi_body = vi_header + f"\n📌 <b>Buffett Style:</b> {', '.join(buf_list) if buf_list else 'None'}"
+    vi_body += f"\n🚀 <b>Lynch Style:</b> {', '.join(lyn_list) if lyn_list else 'None'}"
+    send(vi_body)
 
-    # 2. ส่งโซน Momentum (Phase 2 ที่เพิ่มใหม่)
+    # 2. ส่วนของ Phase 2 Validation (ตามที่คุณต้องการเพิ่ม)
     if phase2_list:
-        p2_text = "📈 *Phase 2 Validation (Trend follows Value)*\n"
-        p2_text += "หุ้นที่ยืนเหนือ EMA 10 เดือน & 200 วัน:\n"
-        p2_text += "`" + ", ".join(phase2_list) + "`"
-        send(p2_text)
+        p2_body = "\n\n🚀 <b>Phase 2 Validation List</b>\n"
+        p2_body += "<i>Price > EMA200 & Price > EMA10M</i>\n"
+        p2_body += "---------------------------\n"
+        for ticker in phase2_list:
+            p2_body += f"• {ticker}\n"
+        send(p2_body)
+    else:
+        send("\n\n📊 <b>Phase 2 Style</b>\nNo stocks passing Phase 2 criteria today.")
 
 if __name__ == '__main__':
     main()
