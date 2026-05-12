@@ -35,22 +35,14 @@ jobs:
           TOP_N     = 5
 
           WATCHLIST = [
-              # Portfolio stocks
               'FCEL','ELPW','KEEL',
-              # Fuel Cell / Hydrogen
               'PLUG','BE','BLDP','HTOO',
-              # Nuclear / Power
               'SMR','OKLO','NNE','CEG','VST',
-              # AI / Quantum
               'IONQ','QBTS','QUBT','RGTI','ARQQ',
               'BBAI','SOUN','AIXI','APLD',
-              # Clean Energy
               'ARRY','NOVA','SHLS','STEM',
-              # EV / Battery
               'MVST','ENVX','FREYR',
-              # Air Mobility
               'ASTS','ACHR','JOBY',
-              # General small cap momentum
               'SMCI','COHR','VRT','PATH',
               'PRCT','GTLB','OPEN','AIOT',
           ]
@@ -89,6 +81,14 @@ jobs:
                   ret_1w  = (closes.iloc[-1] - closes.iloc[-6])  / closes.iloc[-6]  if len(closes) >= 6  else 0
                   ret_1m  = (closes.iloc[-1] - closes.iloc[-22]) / closes.iloc[-22] if len(closes) >= 22 else 0
                   ret_3m  = (closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66] if len(closes) >= 66 else 0
+                  atr_list = []
+                  for i in range(1, min(15, len(closes))):
+                      tr = max(
+                          float(closes.iloc[-i]) - float(closes.iloc[-i-1]),
+                          abs(float(closes.iloc[-i]) - float(closes.iloc[-i-1])),
+                      )
+                      atr_list.append(tr)
+                  atr = sum(atr_list) / len(atr_list) if atr_list else float(price) * 0.03
                   return {
                       'ticker':       ticker,
                       'name':         info.get('shortName', ticker),
@@ -107,6 +107,7 @@ jobs:
                       'short_ratio':  info.get('shortRatio') or 0,
                       'pct_from_low': (float(price) - float(low52))  / float(low52)  if low52  > 0 else 0,
                       'pct_from_high':(float(high52) - float(price)) / float(high52) if high52 > 0 else 0,
+                      'atr':          atr,
                       'desc':         (info.get('longBusinessSummary') or '')[:100],
                   }
               except Exception as e:
@@ -138,9 +139,15 @@ jobs:
                   score += 5;  signals.append('Low+' + str(round(d['pct_from_low']*100)) + '%')
               if score < 25:
                   return None
+              p = d['price']
+              sl   = round(p * 0.85, 2)
+              tp1  = round(p * 1.30, 2)
+              tp2  = round(p * 1.60, 2)
+              tp3  = round(p * 2.00, 2)
               return {
                   'ticker': d['ticker'], 'name': d['name'], 'score': score,
-                  'price': d['price'], 'mktcap': d['mktcap'],
+                  'price': p, 'mktcap': d['mktcap'],
+                  'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3,
                   'metrics': ' / '.join(signals) if signals else 'n/a',
                   'ret_1w': d['ret_1w'], 'desc': d['desc'],
               }
@@ -168,9 +175,15 @@ jobs:
                   score += 10; signals.append('MA stack OK')
               if score < 30:
                   return None
+              p = d['price']
+              sl   = round(p * 0.90, 2)
+              tp1  = round(p * 1.25, 2)
+              tp2  = round(p * 1.50, 2)
+              tp3  = round(p * 1.80, 2)
               return {
                   'ticker': d['ticker'], 'name': d['name'], 'score': score,
-                  'price': d['price'], 'mktcap': d['mktcap'],
+                  'price': p, 'mktcap': d['mktcap'],
+                  'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3,
                   'metrics': ' / '.join(signals) if signals else 'n/a',
                   'ret_1m': d['ret_1m'], 'ret_3m': d['ret_3m'],
                   'pct_from_high': d['pct_from_high'], 'desc': d['desc'],
@@ -186,7 +199,8 @@ jobs:
                   '',
                   '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
                   '  Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']),
-                  '  $' + str(round(s['price'], 2)) + ' | 1W: ' + ('+' if s['ret_1w'] >= 0 else '') + str(round(s['ret_1w']*100, 1)) + '%',
+                  '  Buy: $' + str(round(s['price'], 2)) + ' | SL: $' + str(s['sl']) + ' (-15%)',
+                  '  TP1: $' + str(s['tp1']) + ' (+30%) | TP2: $' + str(s['tp2']) + ' (+60%) | TP3: $' + str(s['tp3']) + ' (+100%)',
                   '  ' + s['metrics'],
               ]
               if s['desc']: lines.append('  ' + s['desc'])
@@ -197,7 +211,8 @@ jobs:
                   '',
                   '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
                   '  Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']),
-                  '  $' + str(round(s['price'], 2)) + ' | 1M: +' + str(round(s['ret_1m']*100, 1)) + '% | 3M: +' + str(round(s['ret_3m']*100, 1)) + '%',
+                  '  Buy: $' + str(round(s['price'], 2)) + ' | SL: $' + str(s['sl']) + ' (-10%)',
+                  '  TP1: $' + str(s['tp1']) + ' (+25%) | TP2: $' + str(s['tp2']) + ' (+50%) | TP3: $' + str(s['tp3']) + ' (+80%)',
                   '  ' + s['metrics'],
               ]
               if s['desc']: lines.append('  ' + s['desc'])
@@ -216,13 +231,13 @@ jobs:
               sq_list.sort(key=lambda x: -x['score'])
               bo_list.sort(key=lambda x: -x['score'])
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-              send('<b>Momentum Scanner - ' + today + '</b>\n🔥 SHORT SQUEEZE | 🚀 BREAKOUT\nHigh risk small cap — verify before trading.')
+              send('<b>Momentum Scanner - ' + today + '</b>\n🔥 SHORT SQUEEZE | 🚀 BREAKOUT\nSL/TP based on entry price\nHigh risk — verify before trading.')
               if sq_list:
-                  send('<b>🔥 SHORT SQUEEZE Setup</b>\n(Short Interest + Volume Surge + Weekly Momentum)' + ''.join(fmt_sq(i+1, s) for i, s in enumerate(sq_list[:TOP_N])))
+                  send('<b>🔥 SHORT SQUEEZE Setup</b>\n(SL -15% / TP1 +30% / TP2 +60% / TP3 +100%)' + ''.join(fmt_sq(i+1, s) for i, s in enumerate(sq_list[:TOP_N])))
               else:
                   send('<b>🔥 SHORT SQUEEZE</b>\nNo setups today.')
               if bo_list:
-                  send('<b>🚀 BREAKOUT Momentum</b>\n(Near 52W High + Volume + Strong Return)' + ''.join(fmt_bo(i+1, s) for i, s in enumerate(bo_list[:TOP_N])))
+                  send('<b>🚀 BREAKOUT Momentum</b>\n(SL -10% / TP1 +25% / TP2 +50% / TP3 +80%)' + ''.join(fmt_bo(i+1, s) for i, s in enumerate(bo_list[:TOP_N])))
               else:
                   send('<b>🚀 BREAKOUT Momentum</b>\nNo breakouts today.')
               print('Done.')
