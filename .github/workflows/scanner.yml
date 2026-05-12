@@ -34,26 +34,24 @@ jobs:
           TIMEZONE  = 'Asia/Bangkok'
           TOP_N     = 3
 
+          # Large cap + Mid cap growth stocks
           WATCHLIST = [
-              'AAPL','MSFT','NVDA','AMZN','GOOGL','META','BRK-B','LLY','AVGO','TSLA',
+              # Mega cap
+              'AAPL','MSFT','NVDA','AMZN','GOOGL','META','BRK-B','LLY','AVGO',
               'WMT','JPM','V','UNH','XOM','ORCL','MA','COST','HD','PG',
-              'JNJ','ABBV','BAC','KO','MRK','CVX','CRM','NFLX','AMD','PEP',
-              'TMO','ACN','LIN','MCD','ABT','ADBE','PM','GE','IBM','TXN',
-              'ISRG','INTU','VZ','CAT','CMCSA','NOW','AMGN','DHR','NEE','RTX',
-              'UNP','QCOM','LOW','SPGI','GS','BKNG','MS','BLK','SYK','AMAT',
-              'T','PLD','AXP','GILD','MDT','ADI','CB','VRTX','MMC','AMT',
-              'CI','TJX','BSX','REGN','MO','DUK','SO','EOG','SLB','HCA',
-              'ZTS','BDX','ITW','ETN','AON','CME','ICE','PGR','USB','ELV',
-              'LRCX','MU','KLAC','SNPS','CDNS','MCHP','NXPI','ON','TER','ANET',
-              'DE','EMR','PH','ROK','IR','AME','CTAS','RSG','WM','ECL',
-              'APD','SHW','PPG','NUE','FCX','NEM','BALL','IP','CF','MOS',
-              'WFC','C','PNC','TFC','COF','AIG','PRU','MET','AFL','ALL',
-              'CVS','MCK','ABC','CAH','HUM','CNC','MOH','DVA','LH','DGX',
-              'AMZN','EBAY','ETSY','W','CHWY','CVNA','DKNG','LYFT','UBER','ABNB',
-              'COP','PSX','VLO','MPC','OXY','DVN','FANG','APA','HES','HAL',
-              'DIS','CMCSA','PARA','WBD','LYV','NFLX','SPOT','TTD','ROKU','MTCH',
-              'PFE','MRNA','BIIB','ILMN','IQV','CRL','CTLT','IQVIA','PKI','WAT',
-              'BAX','EW','HOLX','TRMB','IDXX','IDEXX','MTD','A','DXCM','PODD',
+              'JNJ','ABBV','BAC','KO','MRK','CVX','CRM','NFLX','AMD',
+              'TMO','ACN','MCD','ADBE','GE','IBM','TXN','ISRG','INTU',
+              'QCOM','LOW','SPGI','GS','MS','BLK','SYK','AMAT',
+              'GILD','MDT','ADI','VRTX','MMC','AMT','CI','TJX','BSX','REGN',
+              # Mid cap growth
+              'SMCI','COHR','VRT','GTLB','PATH','DDOG','SNOW','NET','CRWD',
+              'AXON','ENPH','SEDG','RUN','FSLR','PLUG','CELH','DUOL',
+              'SAMSARA','IOT','MNDY','BILL','TOST','CAVA','BIRK',
+              'APP','RBLX','U','MTTR','IONQ','ANET','MELI','SE',
+              'TTD','PUBM','MGNI','IAS','DV',
+              # Momentum growth
+              'APLD','VRT','CLSK','CIFR','MARA','RIOT',
+              'ACMR','ONTO','FORM','ICHR','KLIC',
           ]
 
           WATCHLIST = list(dict.fromkeys(WATCHLIST))
@@ -76,43 +74,48 @@ jobs:
                   if not price:
                       return None
                   hist = t.history(period='1y')
-                  if hist.empty or len(hist) < 50:
+                  if hist.empty or len(hist) < 20:
                       return None
-                  closes = hist['Close']
+                  closes  = hist['Close']
                   volumes = hist['Volume']
-                  ma50  = closes[-50:].mean()
+                  ma50  = closes[-50:].mean() if len(closes) >= 50 else closes.mean()
                   ma200 = closes[-200:].mean() if len(closes) >= 200 else closes.mean()
                   high52 = closes.max()
                   low52  = closes.min()
-                  avg_vol = volumes[-20:].mean()
-                  last_vol = volumes[-1]
+                  avg_vol_20 = volumes[-20:].mean() if len(volumes) >= 20 else volumes.mean()
+                  avg_vol_5  = volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
+                  ret_1m = (closes.iloc[-1] - closes.iloc[-22]) / closes.iloc[-22] if len(closes) >= 22 else 0
+                  ret_3m = (closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66] if len(closes) >= 66 else 0
                   return {
-                      'ticker': ticker,
-                      'name': info.get('shortName', ticker),
-                      'price': float(price),
-                      'eps_fwd': info.get('forwardEps'),
-                      'eps_ttm': info.get('trailingEps'),
-                      'growth': info.get('earningsGrowth') or info.get('revenueGrowth'),
-                      'rev_growth': info.get('revenueGrowth'),
-                      'fcf': info.get('freeCashflow'),
-                      'shares': info.get('sharesOutstanding'),
-                      'roe': info.get('returnOnEquity'),
-                      'roic': info.get('returnOnAssets'),
-                      'net_margin': info.get('profitMargins'),
-                      'gross_margin': info.get('grossMargins'),
-                      'peg': info.get('pegRatio'),
-                      'pe': info.get('forwardPE') or info.get('trailingPE'),
-                      'pb': info.get('priceToBook'),
-                      'insider_pct': info.get('heldPercentInsiders'),
-                      'short_pct': info.get('shortPercentOfFloat') or 0,
-                      'target_price': info.get('targetMeanPrice'),
-                      'desc': (info.get('longBusinessSummary') or '')[:120],
-                      'ma50': float(ma50),
-                      'ma200': float(ma200),
-                      'high52': float(high52),
-                      'low52': float(low52),
-                      'rel_vol': float(last_vol / avg_vol) if avg_vol > 0 else 0,
-                      'eps_growth': info.get('earningsGrowth') or 0,
+                      'ticker':        ticker,
+                      'name':          info.get('shortName', ticker),
+                      'price':         float(price),
+                      'eps_fwd':       info.get('forwardEps'),
+                      'eps_ttm':       info.get('trailingEps'),
+                      'growth':        info.get('earningsGrowth') or info.get('revenueGrowth'),
+                      'rev_growth':    info.get('revenueGrowth'),
+                      'fcf':           info.get('freeCashflow'),
+                      'shares':        info.get('sharesOutstanding'),
+                      'roe':           info.get('returnOnEquity'),
+                      'roic':          info.get('returnOnAssets'),
+                      'net_margin':    info.get('profitMargins'),
+                      'gross_margin':  info.get('grossMargins'),
+                      'peg':           info.get('pegRatio'),
+                      'pe':            info.get('forwardPE') or info.get('trailingPE'),
+                      'pb':            info.get('priceToBook'),
+                      'insider_pct':   info.get('heldPercentInsiders'),
+                      'short_pct':     info.get('shortPercentOfFloat') or 0,
+                      'target_price':  info.get('targetMeanPrice'),
+                      'eps_growth':    info.get('earningsGrowth') or 0,
+                      'desc':          (info.get('longBusinessSummary') or '')[:120],
+                      'ma50':          float(ma50),
+                      'ma200':         float(ma200),
+                      'high52':        float(high52),
+                      'low52':         float(low52),
+                      'vol_surge':     float(avg_vol_5 / avg_vol_20) if avg_vol_20 > 0 else 0,
+                      'pct_from_high': (float(high52) - float(price)) / float(high52) if high52 > 0 else 1,
+                      'ret_1m':        float(ret_1m),
+                      'ret_3m':        float(ret_3m),
                   }
               except Exception as e:
                   print(ticker + ' error: ' + str(e))
@@ -181,27 +184,28 @@ jobs:
               ma50 = d['ma50']
               ma200 = d['ma200']
               high52 = d['high52']
-              rel_vol = d['rel_vol']
+              pct_from_high = d['pct_from_high']
               eps_growth = d['eps_growth']
               if p <= ma50: return None
               if p <= ma200: return None
               if ma50 <= ma200: return None
-              if high52 <= 0: return None
-              pct_from_high = (high52 - p) / high52
-              if pct_from_high > 0.25: return None
-              if eps_growth < 0.20: return None
+              if pct_from_high > 0.30: return None
+              if eps_growth < 0.10: return None   # ลดจาก 20% → 10%
               sepa_score = 0
               if p > ma50: sepa_score += 25
               if ma50 > ma200: sepa_score += 25
               if pct_from_high <= 0.15: sepa_score += 25
-              if rel_vol >= 1.0: sepa_score += 25
-              m = ['MA50>MA200', str(round(pct_from_high*100)) + '% from High', 'EPS +' + str(round(eps_growth*100)) + '%', 'RelVol ' + str(round(rel_vol, 1)) + 'x']
+              elif pct_from_high <= 0.25: sepa_score += 15
+              if d['vol_surge'] >= 1.2: sepa_score += 25
+              elif d['vol_surge'] >= 1.0: sepa_score += 10
+              m = ['MA50>MA200', str(round(pct_from_high*100)) + '% from High', 'EPS +' + str(round(eps_growth*100)) + '%', 'VolSurge ' + str(round(d['vol_surge'], 1)) + 'x']
               return {
                   'ticker': d['ticker'], 'name': d['name'],
                   'score': sepa_score, 'price': p,
                   'ma50': ma50, 'ma200': ma200, 'high52': high52,
                   'metrics': ' / '.join(m), 'desc': d['desc'],
                   'pct_from_high': pct_from_high,
+                  'ret_1m': d['ret_1m'], 'ret_3m': d['ret_3m'],
               }
 
           def rerate(d):
@@ -214,13 +218,19 @@ jobs:
               insider = d['insider_pct']
               short_pct = d['short_pct']
               target = d['target_price']
-              if pe and pe < 20: score += 20; signals.append('PE ' + str(round(pe, 1)))
-              if pb and pb < 3: score += 15; signals.append('PB ' + str(round(pb, 1)))
-              if roic and roic >= 0.10: score += 20; signals.append('ROIC ' + str(round(roic*100)) + '%')
-              if insider and insider >= 0.05: score += 20; signals.append('Insider ' + str(round(insider*100, 1)) + '%')
-              if short_pct and short_pct >= 0.05: score += 10; signals.append('Short ' + str(round(short_pct*100, 1)) + '%')
-              if target and p > 0 and (target - p) / p >= 0.15: score += 15; signals.append('Target +' + str(round((target-p)/p*100)) + '%')
-              if score < 50: return None
+              if pe and 0 < pe < 25:
+                  score += 20; signals.append('PE ' + str(round(pe, 1)))
+              if pb and pb < 5:
+                  score += 10; signals.append('PB ' + str(round(pb, 1)))
+              if roic and roic >= 0.08:
+                  score += 20; signals.append('ROIC ' + str(round(roic*100)) + '%')
+              if insider and insider >= 0.03:
+                  score += 20; signals.append('Insider ' + str(round(insider*100, 1)) + '%')
+              if short_pct and short_pct >= 0.03:
+                  score += 10; signals.append('Short ' + str(round(short_pct*100, 1)) + '%')
+              if target and p > 0 and (target - p) / p >= 0.10:
+                  score += 20; signals.append('Target +' + str(round((target-p)/p*100)) + '%')
+              if score < 35: return None   # ลดจาก 50 → 35
               upside = ((target - p) / p * 100) if target and p > 0 else 0
               return {
                   'ticker': d['ticker'], 'name': d['name'],
@@ -241,6 +251,7 @@ jobs:
               lines = ['', '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
                   '  SEPA Score: ' + str(s['score']) + '/100',
                   '  Price: $' + str(round(s['price'], 2)) + ' | MA50: $' + str(round(s['ma50'], 2)) + ' | 52W High: $' + str(round(s['high52'], 2)),
+                  '  1M: +' + str(round(s['ret_1m']*100, 1)) + '% | 3M: +' + str(round(s['ret_3m']*100, 1)) + '%',
                   '  ' + s['metrics']]
               if s['desc']: lines.append('  ' + s['desc'])
               return '\n'.join(lines)
@@ -275,21 +286,27 @@ jobs:
               mini.sort(key=lambda x: (-x['score'], x['pct_from_high']))
               rr.sort(key=lambda x: (-x['score'], -x['upside']))
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-              send('<b>Daily Scan - ' + today + '</b>\n🟢 BUY ZONE | 🟡 WATCH | 📈 SEPA | 🔄 RE-RATING\nScanned ' + str(len(WATCHLIST)) + ' stocks | Verify before investing.')
+              send('<b>Daily Scan - ' + today + '</b>\n🟢 BUY ZONE | 🟡 WATCH | 📈 SEPA | 🔄 RE-RATING\nScanned ' + str(len(WATCHLIST)) + ' stocks')
               if buf:
                   send('<b>WARREN BUFFETT Style</b>\n(Fair=EPS x 22 / Buy=Fair x 0.85)' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
+              else:
+                  send('<b>WARREN BUFFETT Style</b>\nNo stocks today.')
               if lyn:
                   send('<b>PETER LYNCH Style</b>\n(Fair=EPS x Growth / Buy=Fair x 0.95)' + ''.join(fmt(i+1, s, 'Fast Grower: ') for i, s in enumerate(lyn[:TOP_N])))
+              else:
+                  send('<b>PETER LYNCH Style</b>\nNo stocks today.')
               if slp:
                   send('<b>NICK SLEEP Style</b>\n(Fair=FCF/0.04 / Buy=Fair x 0.90)' + ''.join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N])))
+              else:
+                  send('<b>NICK SLEEP Style</b>\nNo stocks today.')
               if mini:
-                  send('<b>MINERVINI SEPA Style</b>\n(Price>MA50>MA200 / Near 52W High / EPS>20%)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
+                  send('<b>MINERVINI SEPA Style</b>\n(Price>MA50>MA200 / Near 52W High / EPS>10%)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
               else:
-                  send('<b>MINERVINI SEPA Style</b>\nNo stocks passing SEPA criteria today.')
+                  send('<b>MINERVINI SEPA Style</b>\nNo stocks today.')
               if rr:
-                  send('<b>RE-RATING Scanner</b>\n(Low PE/PB + High ROIC + Insider Buy + Analyst Upside)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
+                  send('<b>RE-RATING Scanner</b>\n(Low PE/PB + ROIC + Insider + Analyst Upside)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
               else:
-                  send('<b>RE-RATING Scanner</b>\nNo stocks passing re-rating criteria today.')
+                  send('<b>RE-RATING Scanner</b>\nNo stocks today.')
               print('Done.')
 
           main()
