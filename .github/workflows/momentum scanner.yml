@@ -58,6 +58,20 @@ jobs:
               r.raise_for_status()
               time.sleep(0.5)
 
+          def calc_atr(hist, period=14):
+              highs  = hist['High'].values
+              lows   = hist['Low'].values
+              closes = hist['Close'].values
+              trs = []
+              for i in range(1, min(period+1, len(closes))):
+                  tr = max(
+                      highs[-i] - lows[-i],
+                      abs(highs[-i] - closes[-i-1]),
+                      abs(lows[-i]  - closes[-i-1]),
+                  )
+                  trs.append(tr)
+              return sum(trs) / len(trs) if trs else 0
+
           def fetch(ticker):
               try:
                   session = cffi_requests.Session(impersonate='chrome')
@@ -69,7 +83,7 @@ jobs:
                   hist = t.history(period='1y')
                   if hist.empty or len(hist) < 10:
                       return None
-                  closes = hist['Close']
+                  closes  = hist['Close']
                   volumes = hist['Volume']
                   high52     = closes.max()
                   low52      = closes.min()
@@ -77,42 +91,52 @@ jobs:
                   ma50       = closes[-50:].mean() if len(closes) >= 50 else closes.mean()
                   avg_vol_20 = volumes[-20:].mean() if len(volumes) >= 20 else volumes.mean()
                   avg_vol_5  = volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
-                  last_vol   = float(volumes.iloc[-1])
                   ret_1w  = (closes.iloc[-1] - closes.iloc[-6])  / closes.iloc[-6]  if len(closes) >= 6  else 0
                   ret_1m  = (closes.iloc[-1] - closes.iloc[-22]) / closes.iloc[-22] if len(closes) >= 22 else 0
                   ret_3m  = (closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66] if len(closes) >= 66 else 0
-                  atr_list = []
-                  for i in range(1, min(15, len(closes))):
-                      tr = max(
-                          float(closes.iloc[-i]) - float(closes.iloc[-i-1]),
-                          abs(float(closes.iloc[-i]) - float(closes.iloc[-i-1])),
-                      )
-                      atr_list.append(tr)
-                  atr = sum(atr_list) / len(atr_list) if atr_list else float(price) * 0.03
+                  atr = calc_atr(hist, 14)
+                  atr_pct = (atr / float(price)) * 100
                   return {
-                      'ticker':       ticker,
-                      'name':         info.get('shortName', ticker),
-                      'price':        float(price),
-                      'mktcap':       info.get('marketCap') or 0,
-                      'high52':       float(high52),
-                      'low52':        float(low52),
-                      'ma20':         float(ma20),
-                      'ma50':         float(ma50),
-                      'vol_surge':    float(avg_vol_5 / avg_vol_20) if avg_vol_20 > 0 else 0,
-                      'rel_vol':      float(last_vol / avg_vol_20) if avg_vol_20 > 0 else 0,
-                      'ret_1w':       float(ret_1w),
-                      'ret_1m':       float(ret_1m),
-                      'ret_3m':       float(ret_3m),
-                      'short_pct':    info.get('shortPercentOfFloat') or 0,
-                      'short_ratio':  info.get('shortRatio') or 0,
-                      'pct_from_low': (float(price) - float(low52))  / float(low52)  if low52  > 0 else 0,
-                      'pct_from_high':(float(high52) - float(price)) / float(high52) if high52 > 0 else 0,
-                      'atr':          atr,
-                      'desc':         (info.get('longBusinessSummary') or '')[:100],
+                      'ticker':        ticker,
+                      'name':          info.get('shortName', ticker),
+                      'price':         float(price),
+                      'mktcap':        info.get('marketCap') or 0,
+                      'high52':        float(high52),
+                      'low52':         float(low52),
+                      'ma20':          float(ma20),
+                      'ma50':          float(ma50),
+                      'vol_surge':     float(avg_vol_5 / avg_vol_20) if avg_vol_20 > 0 else 0,
+                      'ret_1w':        float(ret_1w),
+                      'ret_1m':        float(ret_1m),
+                      'ret_3m':        float(ret_3m),
+                      'short_pct':     info.get('shortPercentOfFloat') or 0,
+                      'short_ratio':   info.get('shortRatio') or 0,
+                      'pct_from_low':  (float(price) - float(low52))  / float(low52)  if low52  > 0 else 0,
+                      'pct_from_high': (float(high52) - float(price)) / float(high52) if high52 > 0 else 0,
+                      'atr':           atr,
+                      'atr_pct':       atr_pct,
+                      'desc':          (info.get('longBusinessSummary') or '')[:100],
                   }
               except Exception as e:
                   print(ticker + ' error: ' + str(e))
                   return None
+
+          def calc_levels(price, atr, mode):
+              if mode == 'squeeze':
+                  sl  = round(price - 2.0 * atr, 2)
+                  tp1 = round(price + 2.0 * atr, 2)
+                  tp2 = round(price + 4.0 * atr, 2)
+                  tp3 = round(price + 8.0 * atr, 2)
+              else:
+                  sl  = round(price - 1.5 * atr, 2)
+                  tp1 = round(price + 1.5 * atr, 2)
+                  tp2 = round(price + 3.0 * atr, 2)
+                  tp3 = round(price + 6.0 * atr, 2)
+              sl_pct  = round((sl  - price) / price * 100, 1)
+              tp1_pct = round((tp1 - price) / price * 100, 1)
+              tp2_pct = round((tp2 - price) / price * 100, 1)
+              tp3_pct = round((tp3 - price) / price * 100, 1)
+              return sl, tp1, tp2, tp3, sl_pct, tp1_pct, tp2_pct, tp3_pct
 
           def squeeze_score(d):
               score = 0
@@ -140,14 +164,12 @@ jobs:
               if score < 25:
                   return None
               p = d['price']
-              sl   = round(p * 0.85, 2)
-              tp1  = round(p * 1.30, 2)
-              tp2  = round(p * 1.60, 2)
-              tp3  = round(p * 2.00, 2)
+              sl, tp1, tp2, tp3, sl_pct, tp1_pct, tp2_pct, tp3_pct = calc_levels(p, d['atr'], 'squeeze')
               return {
                   'ticker': d['ticker'], 'name': d['name'], 'score': score,
-                  'price': p, 'mktcap': d['mktcap'],
+                  'price': p, 'mktcap': d['mktcap'], 'atr_pct': d['atr_pct'],
                   'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3,
+                  'sl_pct': sl_pct, 'tp1_pct': tp1_pct, 'tp2_pct': tp2_pct, 'tp3_pct': tp3_pct,
                   'metrics': ' / '.join(signals) if signals else 'n/a',
                   'ret_1w': d['ret_1w'], 'desc': d['desc'],
               }
@@ -176,14 +198,12 @@ jobs:
               if score < 30:
                   return None
               p = d['price']
-              sl   = round(p * 0.90, 2)
-              tp1  = round(p * 1.25, 2)
-              tp2  = round(p * 1.50, 2)
-              tp3  = round(p * 1.80, 2)
+              sl, tp1, tp2, tp3, sl_pct, tp1_pct, tp2_pct, tp3_pct = calc_levels(p, d['atr'], 'breakout')
               return {
                   'ticker': d['ticker'], 'name': d['name'], 'score': score,
-                  'price': p, 'mktcap': d['mktcap'],
+                  'price': p, 'mktcap': d['mktcap'], 'atr_pct': d['atr_pct'],
                   'sl': sl, 'tp1': tp1, 'tp2': tp2, 'tp3': tp3,
+                  'sl_pct': sl_pct, 'tp1_pct': tp1_pct, 'tp2_pct': tp2_pct, 'tp3_pct': tp3_pct,
                   'metrics': ' / '.join(signals) if signals else 'n/a',
                   'ret_1m': d['ret_1m'], 'ret_3m': d['ret_3m'],
                   'pct_from_high': d['pct_from_high'], 'desc': d['desc'],
@@ -198,9 +218,12 @@ jobs:
               lines = [
                   '',
                   '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
-                  '  Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']),
-                  '  Buy: $' + str(round(s['price'], 2)) + ' | SL: $' + str(s['sl']) + ' (-15%)',
-                  '  TP1: $' + str(s['tp1']) + ' (+30%) | TP2: $' + str(s['tp2']) + ' (+60%) | TP3: $' + str(s['tp3']) + ' (+100%)',
+                  '  Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']) + ' | ATR: ' + str(round(s['atr_pct'], 1)) + '%/day',
+                  '  Buy: $' + str(round(s['price'], 2)),
+                  '  SL:  $' + str(s['sl'])  + ' (' + str(s['sl_pct'])  + '%)',
+                  '  TP1: $' + str(s['tp1']) + ' (' + str(s['tp1_pct']) + '%)',
+                  '  TP2: $' + str(s['tp2']) + ' (' + str(s['tp2_pct']) + '%)',
+                  '  TP3: $' + str(s['tp3']) + ' (' + str(s['tp3_pct']) + '%)',
                   '  ' + s['metrics'],
               ]
               if s['desc']: lines.append('  ' + s['desc'])
@@ -210,9 +233,12 @@ jobs:
               lines = [
                   '',
                   '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
-                  '  Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']),
-                  '  Buy: $' + str(round(s['price'], 2)) + ' | SL: $' + str(s['sl']) + ' (-10%)',
-                  '  TP1: $' + str(s['tp1']) + ' (+25%) | TP2: $' + str(s['tp2']) + ' (+50%) | TP3: $' + str(s['tp3']) + ' (+80%)',
+                  '  Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']) + ' | ATR: ' + str(round(s['atr_pct'], 1)) + '%/day',
+                  '  Buy: $' + str(round(s['price'], 2)),
+                  '  SL:  $' + str(s['sl'])  + ' (' + str(s['sl_pct'])  + '%)',
+                  '  TP1: $' + str(s['tp1']) + ' (' + str(s['tp1_pct']) + '%)',
+                  '  TP2: $' + str(s['tp2']) + ' (' + str(s['tp2_pct']) + '%)',
+                  '  TP3: $' + str(s['tp3']) + ' (' + str(s['tp3_pct']) + '%)',
                   '  ' + s['metrics'],
               ]
               if s['desc']: lines.append('  ' + s['desc'])
@@ -231,13 +257,26 @@ jobs:
               sq_list.sort(key=lambda x: -x['score'])
               bo_list.sort(key=lambda x: -x['score'])
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-              send('<b>Momentum Scanner - ' + today + '</b>\n🔥 SHORT SQUEEZE | 🚀 BREAKOUT\nSL/TP based on entry price\nHigh risk — verify before trading.')
+              send(
+                  '<b>Momentum Scanner - ' + today + '</b>\n'
+                  '🔥 SHORT SQUEEZE | 🚀 BREAKOUT\n'
+                  'SL/TP คำนวณจาก ATR 14 วันของแต่ละหุ้น\n'
+                  'High risk — verify before trading.'
+              )
               if sq_list:
-                  send('<b>🔥 SHORT SQUEEZE Setup</b>\n(SL -15% / TP1 +30% / TP2 +60% / TP3 +100%)' + ''.join(fmt_sq(i+1, s) for i, s in enumerate(sq_list[:TOP_N])))
+                  send(
+                      '<b>🔥 SHORT SQUEEZE Setup</b>\n'
+                      '(SL=2xATR / TP1=2xATR / TP2=4xATR / TP3=8xATR)'
+                      + ''.join(fmt_sq(i+1, s) for i, s in enumerate(sq_list[:TOP_N]))
+                  )
               else:
                   send('<b>🔥 SHORT SQUEEZE</b>\nNo setups today.')
               if bo_list:
-                  send('<b>🚀 BREAKOUT Momentum</b>\n(SL -10% / TP1 +25% / TP2 +50% / TP3 +80%)' + ''.join(fmt_bo(i+1, s) for i, s in enumerate(bo_list[:TOP_N])))
+                  send(
+                      '<b>🚀 BREAKOUT Momentum</b>\n'
+                      '(SL=1.5xATR / TP1=1.5xATR / TP2=3xATR / TP3=6xATR)'
+                      + ''.join(fmt_bo(i+1, s) for i, s in enumerate(bo_list[:TOP_N]))
+                  )
               else:
                   send('<b>🚀 BREAKOUT Momentum</b>\nNo breakouts today.')
               print('Done.')
