@@ -34,36 +34,67 @@ jobs:
           TIMEZONE  = 'Asia/Bangkok'
           TOP_N     = 3
 
-          # Large cap + Mid cap growth stocks
           WATCHLIST = [
-              # Mega cap
               'AAPL','MSFT','NVDA','AMZN','GOOGL','META','BRK-B','LLY','AVGO',
               'WMT','JPM','V','UNH','XOM','ORCL','MA','COST','HD','PG',
               'JNJ','ABBV','BAC','KO','MRK','CVX','CRM','NFLX','AMD',
               'TMO','ACN','MCD','ADBE','GE','IBM','TXN','ISRG','INTU',
               'QCOM','LOW','SPGI','GS','MS','BLK','SYK','AMAT',
               'GILD','MDT','ADI','VRTX','MMC','AMT','CI','TJX','BSX','REGN',
-              # Mid cap growth
               'SMCI','COHR','VRT','GTLB','PATH','DDOG','SNOW','NET','CRWD',
-              'AXON','ENPH','SEDG','RUN','FSLR','PLUG','CELH','DUOL',
-              'SAMSARA','IOT','MNDY','BILL','TOST','CAVA','BIRK',
-              'APP','RBLX','U','MTTR','IONQ','ANET','MELI','SE',
-              'TTD','PUBM','MGNI','IAS','DV',
-              # Momentum growth
-              'APLD','VRT','CLSK','CIFR','MARA','RIOT',
-              'ACMR','ONTO','FORM','ICHR','KLIC',
+              'AXON','ENPH','SEDG','RUN','FSLR','CELH','DUOL',
+              'APP','RBLX','MELI','SE','TTD','PUBM','MGNI','IAS','DV',
+              'APLD','CLSK','MARA','RIOT','ACMR','ONTO','FORM','ICHR',
+              'BIRK','CAVA','TOST','MNDY','BILL','IOT',
           ]
-
           WATCHLIST = list(dict.fromkeys(WATCHLIST))
 
           def send(text):
-              r = requests.post(
-                  'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
-                  json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
-                  timeout=15,
-              )
-              r.raise_for_status()
+              if len(text) > 4000: text = text[:3990] + '...'
+              try:
+                  r = requests.post(
+                      'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                      json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
+                      timeout=15,
+                  )
+                  if r.status_code != 200:
+                      requests.post(
+                          'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                          json={'chat_id': CHAT_ID, 'text': text.replace('<b>','').replace('</b>','')},
+                          timeout=15,
+                      )
+              except Exception as e:
+                  print('Telegram error: ' + str(e))
               time.sleep(0.5)
+
+          def calc_atr(hist, period=14):
+              if hist.empty or len(hist) < 2: return 0
+              highs  = hist['High'].values
+              lows   = hist['Low'].values
+              closes = hist['Close'].values
+              trs = []
+              for i in range(1, min(period+1, len(closes))):
+                  tr = max(highs[-i]-lows[-i], abs(highs[-i]-closes[-i-1]), abs(lows[-i]-closes[-i-1]))
+                  trs.append(tr)
+              return sum(trs)/len(trs) if trs else 0
+
+          def atr_levels(price, atr, sl_mult=2.0, tp_mults=(2.0,4.0,8.0)):
+              sl  = round(price - sl_mult * atr, 2)
+              tp1 = round(price + tp_mults[0] * atr, 2)
+              tp2 = round(price + tp_mults[1] * atr, 2)
+              tp3 = round(price + tp_mults[2] * atr, 2)
+              def pct(x): return str(round((x-price)/price*100, 1)) + '%'
+              return sl, tp1, tp2, tp3, pct(sl), pct(tp1), pct(tp2), pct(tp3)
+
+          def fmt_levels(price, atr):
+              sl, tp1, tp2, tp3, sp, t1p, t2p, t3p = atr_levels(price, atr)
+              return (
+                  'Buy: $' + str(round(price,2)) + ' | ATR: ' + str(round(atr/price*100,1)) + '%\n'
+                  'SL:  $' + str(sl)  + ' (' + sp  + ')\n'
+                  'TP1: $' + str(tp1) + ' (+' + t1p + ') | '
+                  'TP2: $' + str(tp2) + ' (+' + t2p + ') | '
+                  'TP3: $' + str(tp3) + ' (+' + t3p + ')'
+              )
 
           def fetch(ticker):
               try:
@@ -71,51 +102,42 @@ jobs:
                   t = yf.Ticker(ticker, session=session)
                   info = t.info
                   price = info.get('currentPrice') or info.get('regularMarketPrice')
-                  if not price:
-                      return None
+                  if not price: return None
                   hist = t.history(period='1y')
-                  if hist.empty or len(hist) < 20:
-                      return None
+                  if hist.empty or len(hist) < 20: return None
                   closes  = hist['Close']
                   volumes = hist['Volume']
-                  ma50  = closes[-50:].mean() if len(closes) >= 50 else closes.mean()
-                  ma200 = closes[-200:].mean() if len(closes) >= 200 else closes.mean()
+                  atr    = calc_atr(hist)
+                  ma50   = closes[-50:].mean() if len(closes) >= 50 else closes.mean()
+                  ma200  = closes[-200:].mean() if len(closes) >= 200 else closes.mean()
                   high52 = closes.max()
                   low52  = closes.min()
                   avg_vol_20 = volumes[-20:].mean() if len(volumes) >= 20 else volumes.mean()
                   avg_vol_5  = volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
-                  ret_1m = (closes.iloc[-1] - closes.iloc[-22]) / closes.iloc[-22] if len(closes) >= 22 else 0
-                  ret_3m = (closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66] if len(closes) >= 66 else 0
+                  ret_1m = (closes.iloc[-1]-closes.iloc[-22])/closes.iloc[-22] if len(closes)>=22 else 0
+                  ret_3m = (closes.iloc[-1]-closes.iloc[-66])/closes.iloc[-66] if len(closes)>=66 else 0
                   return {
-                      'ticker':        ticker,
-                      'name':          info.get('shortName', ticker),
-                      'price':         float(price),
-                      'eps_fwd':       info.get('forwardEps'),
-                      'eps_ttm':       info.get('trailingEps'),
-                      'growth':        info.get('earningsGrowth') or info.get('revenueGrowth'),
-                      'rev_growth':    info.get('revenueGrowth'),
-                      'fcf':           info.get('freeCashflow'),
-                      'shares':        info.get('sharesOutstanding'),
-                      'roe':           info.get('returnOnEquity'),
-                      'roic':          info.get('returnOnAssets'),
-                      'net_margin':    info.get('profitMargins'),
-                      'gross_margin':  info.get('grossMargins'),
-                      'peg':           info.get('pegRatio'),
-                      'pe':            info.get('forwardPE') or info.get('trailingPE'),
-                      'pb':            info.get('priceToBook'),
-                      'insider_pct':   info.get('heldPercentInsiders'),
-                      'short_pct':     info.get('shortPercentOfFloat') or 0,
-                      'target_price':  info.get('targetMeanPrice'),
-                      'eps_growth':    info.get('earningsGrowth') or 0,
-                      'desc':          (info.get('longBusinessSummary') or '')[:120],
-                      'ma50':          float(ma50),
-                      'ma200':         float(ma200),
-                      'high52':        float(high52),
-                      'low52':         float(low52),
-                      'vol_surge':     float(avg_vol_5 / avg_vol_20) if avg_vol_20 > 0 else 0,
-                      'pct_from_high': (float(high52) - float(price)) / float(high52) if high52 > 0 else 1,
-                      'ret_1m':        float(ret_1m),
-                      'ret_3m':        float(ret_3m),
+                      'ticker': ticker, 'name': info.get('shortName', ticker),
+                      'price': float(price), 'atr': atr,
+                      'eps_fwd': info.get('forwardEps'), 'eps_ttm': info.get('trailingEps'),
+                      'growth': info.get('earningsGrowth') or info.get('revenueGrowth'),
+                      'rev_growth': info.get('revenueGrowth'),
+                      'fcf': info.get('freeCashflow'), 'shares': info.get('sharesOutstanding'),
+                      'roe': info.get('returnOnEquity'), 'roic': info.get('returnOnAssets'),
+                      'net_margin': info.get('profitMargins'), 'gross_margin': info.get('grossMargins'),
+                      'peg': info.get('pegRatio'),
+                      'pe': info.get('forwardPE') or info.get('trailingPE'),
+                      'pb': info.get('priceToBook'),
+                      'insider_pct': info.get('heldPercentInsiders'),
+                      'short_pct': info.get('shortPercentOfFloat') or 0,
+                      'target_price': info.get('targetMeanPrice'),
+                      'eps_growth': info.get('earningsGrowth') or 0,
+                      'desc': (info.get('longBusinessSummary') or '')[:120],
+                      'ma50': float(ma50), 'ma200': float(ma200),
+                      'high52': float(high52), 'low52': float(low52),
+                      'vol_surge': float(avg_vol_5/avg_vol_20) if avg_vol_20 > 0 else 0,
+                      'pct_from_high': (float(high52)-float(price))/float(high52) if high52 > 0 else 1,
+                      'ret_1m': float(ret_1m), 'ret_3m': float(ret_3m),
                   }
               except Exception as e:
                   print(ticker + ' error: ' + str(e))
@@ -133,17 +155,16 @@ jobs:
               return {
                   'ticker': d['ticker'], 'name': d['name'], 'score': qscore(d),
                   'status': 'BUY ZONE' if d['price'] <= buy else 'WATCH',
-                  'price': d['price'], 'fair': fair, 'buy': buy,
-                  'disc': (d['price'] - fair) / fair * 100,
-                  'metrics': metrics, 'desc': d['desc'], 'gap': gap,
+                  'price': d['price'], 'atr': d['atr'], 'fair': fair, 'buy': buy,
+                  'disc': (d['price']-fair)/fair*100, 'metrics': metrics,
+                  'desc': d['desc'], 'gap': gap,
               }
 
           def buffett(d):
               eps = d['eps_fwd']
               if not eps or eps <= 0: return None
-              fair = eps * 22
-              buy = fair * 0.85
-              gap = (d['price'] - buy) / buy
+              fair = eps * 22; buy = fair * 0.85
+              gap = (d['price']-buy)/buy
               if gap > 0.10: return None
               m = []
               if d['roe']: m.append('ROE ' + str(round(d['roe']*100)) + '%')
@@ -155,112 +176,98 @@ jobs:
               eps = d['eps_ttm'] or d['eps_fwd']
               growth = d['growth']
               if not eps or eps <= 0 or not growth or growth <= 0: return None
-              gp = growth * 100
-              fair = eps * gp
-              buy = fair * 0.95
-              gap = (d['price'] - buy) / buy
+              gp = growth * 100; fair = eps * gp; buy = fair * 0.95
+              gap = (d['price']-buy)/buy
               if gap > 0.10: return None
-              peg = ('PEG ' + str(round(d['peg'], 2))) if d['peg'] else ('PEG ~' + str(round(d['price']/fair, 2)))
+              peg = ('PEG ' + str(round(d['peg'],2))) if d['peg'] else ('PEG ~' + str(round(d['price']/fair,2)))
               m = [peg, 'EPS +' + str(round(gp)) + '%']
               if d['rev_growth']: m.append('Rev +' + str(round(d['rev_growth']*100)) + '%')
               return make_row(d, fair, buy, gap, ' / '.join(m))
 
           def sleep_scan(d):
               if not d['fcf'] or not d['shares'] or d['shares'] <= 0: return None
-              fcf_ps = d['fcf'] / d['shares']
+              fcf_ps = d['fcf']/d['shares']
               if fcf_ps <= 0: return None
-              fair = fcf_ps / 0.04
-              buy = fair * 0.90
-              gap = (d['price'] - buy) / buy
+              fair = fcf_ps/0.04; buy = fair*0.90
+              gap = (d['price']-buy)/buy
               if gap > 0.10: return None
               m = []
               if d['rev_growth']: m.append('Rev +' + str(round(d['rev_growth']*100)) + '%')
               if d['roe']: m.append('ROE ' + str(round(d['roe']*100)) + '%')
-              if d['insider_pct']: m.append('Insider ' + str(round(d['insider_pct']*100, 1)) + '%')
+              if d['insider_pct']: m.append('Insider ' + str(round(d['insider_pct']*100,1)) + '%')
               return make_row(d, fair, buy, gap, ' / '.join(m))
 
           def minervini(d):
               p = d['price']
-              ma50 = d['ma50']
-              ma200 = d['ma200']
-              high52 = d['high52']
-              pct_from_high = d['pct_from_high']
-              eps_growth = d['eps_growth']
-              if p <= ma50: return None
-              if p <= ma200: return None
-              if ma50 <= ma200: return None
-              if pct_from_high > 0.30: return None
-              if eps_growth < 0.10: return None   # ลดจาก 20% → 10%
-              sepa_score = 0
-              if p > ma50: sepa_score += 25
-              if ma50 > ma200: sepa_score += 25
-              if pct_from_high <= 0.15: sepa_score += 25
-              elif pct_from_high <= 0.25: sepa_score += 15
-              if d['vol_surge'] >= 1.2: sepa_score += 25
-              elif d['vol_surge'] >= 1.0: sepa_score += 10
-              m = ['MA50>MA200', str(round(pct_from_high*100)) + '% from High', 'EPS +' + str(round(eps_growth*100)) + '%', 'VolSurge ' + str(round(d['vol_surge'], 1)) + 'x']
+              if p <= d['ma50'] or p <= d['ma200'] or d['ma50'] <= d['ma200']: return None
+              pfh = d['pct_from_high']
+              if pfh > 0.30 or d['eps_growth'] < 0.10: return None
+              sc = 0
+              if pfh <= 0.15: sc += 25
+              elif pfh <= 0.25: sc += 15
+              if d['vol_surge'] >= 1.2: sc += 25
+              elif d['vol_surge'] >= 1.0: sc += 15
+              sc += 25  # above MA50
+              sc += 25  # MA50 > MA200
+              m = ['MA50>MA200', str(round(pfh*100)) + '% from High',
+                   'EPS +' + str(round(d['eps_growth']*100)) + '%',
+                   'VolSurge ' + str(round(d['vol_surge'],1)) + 'x']
               return {
-                  'ticker': d['ticker'], 'name': d['name'],
-                  'score': sepa_score, 'price': p,
-                  'ma50': ma50, 'ma200': ma200, 'high52': high52,
-                  'metrics': ' / '.join(m), 'desc': d['desc'],
-                  'pct_from_high': pct_from_high,
+                  'ticker': d['ticker'], 'name': d['name'], 'score': sc, 'price': p,
+                  'atr': d['atr'], 'ma50': d['ma50'], 'ma200': d['ma200'], 'high52': d['high52'],
+                  'metrics': ' / '.join(m), 'desc': d['desc'], 'pct_from_high': pfh,
                   'ret_1m': d['ret_1m'], 'ret_3m': d['ret_3m'],
               }
 
           def rerate(d):
-              score = 0
-              signals = []
-              p = d['price']
-              pe = d['pe']
-              pb = d['pb']
-              roic = d['roic']
-              insider = d['insider_pct']
-              short_pct = d['short_pct']
-              target = d['target_price']
-              if pe and 0 < pe < 25:
-                  score += 20; signals.append('PE ' + str(round(pe, 1)))
-              if pb and pb < 5:
-                  score += 10; signals.append('PB ' + str(round(pb, 1)))
-              if roic and roic >= 0.08:
-                  score += 20; signals.append('ROIC ' + str(round(roic*100)) + '%')
-              if insider and insider >= 0.03:
-                  score += 20; signals.append('Insider ' + str(round(insider*100, 1)) + '%')
-              if short_pct and short_pct >= 0.03:
-                  score += 10; signals.append('Short ' + str(round(short_pct*100, 1)) + '%')
-              if target and p > 0 and (target - p) / p >= 0.10:
-                  score += 20; signals.append('Target +' + str(round((target-p)/p*100)) + '%')
-              if score < 35: return None   # ลดจาก 50 → 35
-              upside = ((target - p) / p * 100) if target and p > 0 else 0
+              score = 0; signals = []
+              p = d['price']; pe = d['pe']; pb = d['pb']
+              roic = d['roic']; insider = d['insider_pct']
+              short_pct = d['short_pct']; target = d['target_price']
+              if pe and 0 < pe < 25: score += 20; signals.append('PE ' + str(round(pe,1)))
+              if pb and pb < 5: score += 10; signals.append('PB ' + str(round(pb,1)))
+              if roic and roic >= 0.08: score += 20; signals.append('ROIC ' + str(round(roic*100)) + '%')
+              if insider and insider >= 0.03: score += 20; signals.append('Insider ' + str(round(insider*100,1)) + '%')
+              if short_pct and short_pct >= 0.03: score += 10; signals.append('Short ' + str(round(short_pct*100,1)) + '%')
+              if target and p > 0 and (target-p)/p >= 0.10: score += 20; signals.append('Target +' + str(round((target-p)/p*100)) + '%')
+              if score < 35: return None
+              upside = ((target-p)/p*100) if target and p > 0 else 0
               return {
-                  'ticker': d['ticker'], 'name': d['name'],
-                  'score': score, 'price': p, 'upside': upside,
+                  'ticker': d['ticker'], 'name': d['name'], 'score': score,
+                  'price': p, 'atr': d['atr'], 'upside': upside,
                   'metrics': ' / '.join(signals), 'desc': d['desc'],
               }
 
           def fmt(rank, s, prefix=''):
-              emoji = '🟢' if 'BUY' in s['status'] else '🟡'
-              lines = ['', '#' + str(rank) + ' ' + prefix + s['ticker'] + ' - ' + s['name'],
-                  '  Quality: ' + str(s['score']) + '/100 | ' + emoji + ' ' + s['status'],
-                  '  Price: $' + str(round(s['price'], 2)) + ' | Fair: $' + str(round(s['fair'], 2)) + ' (' + str(round(s['disc'])) + '%) | Buy: $' + str(round(s['buy'], 2)),
+              emoji = 'BUY ZONE' if 'BUY' in s['status'] else 'WATCH'
+              lv = fmt_levels(s['price'], s['atr'])
+              lines = ['',
+                  '#' + str(rank) + ' ' + prefix + s['ticker'] + ' - ' + s['name'],
+                  '  Quality: ' + str(s['score']) + '/100 | ' + emoji,
+                  '  Fair: $' + str(round(s['fair'],2)) + ' (' + str(round(s['disc'])) + '%)',
+                  '  ' + lv.replace('\n', '\n  '),
                   '  ' + s['metrics']]
               if s['desc']: lines.append('  ' + s['desc'])
               return '\n'.join(lines)
 
           def fmt_mini(rank, s):
-              lines = ['', '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
-                  '  SEPA Score: ' + str(s['score']) + '/100',
-                  '  Price: $' + str(round(s['price'], 2)) + ' | MA50: $' + str(round(s['ma50'], 2)) + ' | 52W High: $' + str(round(s['high52'], 2)),
-                  '  1M: +' + str(round(s['ret_1m']*100, 1)) + '% | 3M: +' + str(round(s['ret_3m']*100, 1)) + '%',
+              lv = fmt_levels(s['price'], s['atr'])
+              lines = ['',
+                  '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
+                  '  SEPA: ' + str(s['score']) + '/100 | MA50: $' + str(round(s['ma50'],2)) + ' | 52W High: $' + str(round(s['high52'],2)),
+                  '  1M: +' + str(round(s['ret_1m']*100,1)) + '% | 3M: +' + str(round(s['ret_3m']*100,1)) + '%',
+                  '  ' + lv.replace('\n', '\n  '),
                   '  ' + s['metrics']]
               if s['desc']: lines.append('  ' + s['desc'])
               return '\n'.join(lines)
 
           def fmt_rerate(rank, s):
               upside_str = ('+' + str(round(s['upside'])) + '% to target') if s['upside'] > 0 else ''
-              lines = ['', '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
-                  '  Re-rating Score: ' + str(s['score']) + '/100',
-                  '  Price: $' + str(round(s['price'], 2)) + (' | ' + upside_str if upside_str else ''),
+              lv = fmt_levels(s['price'], s['atr'])
+              lines = ['',
+                  '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
+                  '  Re-rating: ' + str(s['score']) + '/100' + (' | ' + upside_str if upside_str else ''),
+                  '  ' + lv.replace('\n', '\n  '),
                   '  ' + s['metrics']]
               if s['desc']: lines.append('  ' + s['desc'])
               return '\n'.join(lines)
@@ -286,27 +293,27 @@ jobs:
               mini.sort(key=lambda x: (-x['score'], x['pct_from_high']))
               rr.sort(key=lambda x: (-x['score'], -x['upside']))
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-              send('<b>Daily Scan - ' + today + '</b>\n🟢 BUY ZONE | 🟡 WATCH | 📈 SEPA | 🔄 RE-RATING\nScanned ' + str(len(WATCHLIST)) + ' stocks')
+              send('Daily Scan - ' + today + '\nBUY ZONE / WATCH / SEPA / RE-RATING\nSL/TP based on ATR 14d per stock\nScanned ' + str(len(WATCHLIST)) + ' stocks')
               if buf:
-                  send('<b>WARREN BUFFETT Style</b>\n(Fair=EPS x 22 / Buy=Fair x 0.85)' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
+                  send('WARREN BUFFETT Style\n(Fair=EPS x 22 / Buy=Fair x 0.85 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
               else:
-                  send('<b>WARREN BUFFETT Style</b>\nNo stocks today.')
+                  send('WARREN BUFFETT Style\nNo stocks today.')
               if lyn:
-                  send('<b>PETER LYNCH Style</b>\n(Fair=EPS x Growth / Buy=Fair x 0.95)' + ''.join(fmt(i+1, s, 'Fast Grower: ') for i, s in enumerate(lyn[:TOP_N])))
+                  send('PETER LYNCH Style\n(Fair=EPS x Growth / Buy=Fair x 0.95 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s, 'Fast Grower: ') for i, s in enumerate(lyn[:TOP_N])))
               else:
-                  send('<b>PETER LYNCH Style</b>\nNo stocks today.')
+                  send('PETER LYNCH Style\nNo stocks today.')
               if slp:
-                  send('<b>NICK SLEEP Style</b>\n(Fair=FCF/0.04 / Buy=Fair x 0.90)' + ''.join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N])))
+                  send('NICK SLEEP Style\n(Fair=FCF/0.04 / Buy=Fair x 0.90 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N])))
               else:
-                  send('<b>NICK SLEEP Style</b>\nNo stocks today.')
+                  send('NICK SLEEP Style\nNo stocks today.')
               if mini:
-                  send('<b>MINERVINI SEPA Style</b>\n(Price>MA50>MA200 / Near 52W High / EPS>10%)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
+                  send('MINERVINI SEPA Style\n(Price>MA50>MA200 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
               else:
-                  send('<b>MINERVINI SEPA Style</b>\nNo stocks today.')
+                  send('MINERVINI SEPA Style\nNo stocks today.')
               if rr:
-                  send('<b>RE-RATING Scanner</b>\n(Low PE/PB + ROIC + Insider + Analyst Upside)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
+                  send('RE-RATING Scanner\n(Low PE/PB + ROIC + Insider / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
               else:
-                  send('<b>RE-RATING Scanner</b>\nNo stocks today.')
+                  send('RE-RATING Scanner\nNo stocks today.')
               print('Done.')
 
           main()
