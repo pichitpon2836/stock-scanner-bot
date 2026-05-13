@@ -25,66 +25,66 @@ jobs:
       - name: Write news_bot.py
         run: |
           cat > news_bot.py << 'PYEOF'
-          import os, time, requests, yfinance as yf, pytz
+          import os, time, requests, yfinance as yf, pytz, html
           from curl_cffi import requests as cffi_requests
           from datetime import datetime, timedelta
 
-          BOT_TOKEN    = os.environ['TELEGRAM_BOT_TOKEN']
-          CHAT_ID      = os.environ['TELEGRAM_CHAT_ID']
-          FINNHUB_KEY  = os.environ['FINNHUB_API_KEY']
-          TIMEZONE     = 'Asia/Bangkok'
-          TOP_N        = 5
+          BOT_TOKEN   = os.environ['TELEGRAM_BOT_TOKEN']
+          CHAT_ID     = os.environ['TELEGRAM_CHAT_ID']
+          FINNHUB_KEY = os.environ['FINNHUB_API_KEY']
+          TIMEZONE    = 'Asia/Bangkok'
+          TOP_N       = 5
 
-          # Keywords ที่บ่งบอก catalyst แรง
           BULLISH_KEYWORDS = [
-              'acquisition', 'merger', 'buyout', 'takeover',
-              'partnership', 'agreement', 'contract', 'deal',
-              'fda approval', 'fda approved', 'clearance',
-              'breakthrough', 'exclusive', 'license',
-              'ai', 'artificial intelligence',
-              'nasdaq compliance', 'uplisting',
-              'revenue', 'earnings beat', 'record',
-              'investment', 'funding', 'raise',
+              'acquisition','merger','buyout','takeover',
+              'partnership','agreement','contract','deal',
+              'fda approval','fda approved','clearance',
+              'breakthrough','exclusive','license',
+              'artificial intelligence',' ai ',
+              'uplisting','compliance',
+              'revenue','earnings beat','record revenue',
+              'investment','funding',
           ]
 
-          # Keywords ที่ต้องระวัง (bearish)
           BEARISH_KEYWORDS = [
-              'delisting', 'bankruptcy', 'default', 'fraud',
-              'sec investigation', 'lawsuit', 'recall',
-              'guidance cut', 'workforce reduction', 'layoff',
+              'delisting','bankruptcy','default','fraud',
+              'sec investigation','lawsuit','recall',
+              'guidance cut','workforce reduction','layoff',
           ]
+
+          def clean(text):
+              return html.escape(str(text))
 
           def send(text):
-              r = requests.post(
-                  'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
-                  json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
-                  timeout=15,
-              )
-              r.raise_for_status()
-              time.sleep(0.5)
-
-          def get_market_news():
-              url = 'https://finnhub.io/api/v1/news'
-              params = {'category': 'general', 'token': FINNHUB_KEY}
+              # ตัดให้ไม่เกิน 4000 chars
+              if len(text) > 4000:
+                  text = text[:3990] + '...'
               try:
-                  r = requests.get(url, params=params, timeout=10)
-                  return r.json() if r.status_code == 200 else []
-              except:
-                  return []
+                  r = requests.post(
+                      'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                      json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
+                      timeout=15,
+                  )
+                  if r.status_code != 200:
+                      # ถ้า HTML fail ให้ส่งแบบ plain text
+                      requests.post(
+                          'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                          json={'chat_id': CHAT_ID, 'text': text.replace('<b>','').replace('</b>','').replace('<i>','').replace('</i>','')},
+                          timeout=15,
+                      )
+              except Exception as e:
+                  print('Telegram error: ' + str(e))
+              time.sleep(0.5)
 
           def get_company_news(ticker):
               today = datetime.now().strftime('%Y-%m-%d')
               yesterday = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
               url = 'https://finnhub.io/api/v1/company-news'
-              params = {
-                  'symbol': ticker,
-                  'from': yesterday,
-                  'to': today,
-                  'token': FINNHUB_KEY,
-              }
+              params = {'symbol': ticker, 'from': yesterday, 'to': today, 'token': FINNHUB_KEY}
               try:
                   r = requests.get(url, params=params, timeout=10)
-                  return r.json() if r.status_code == 200 else []
+                  data = r.json()
+                  return data if isinstance(data, list) else []
               except:
                   return []
 
@@ -92,17 +92,15 @@ jobs:
               text = (headline + ' ' + summary).lower()
               bull_score = 0
               bear_score = 0
-              matched_bull = []
-              matched_bear = []
+              matched = []
               for kw in BULLISH_KEYWORDS:
                   if kw in text:
                       bull_score += 1
-                      matched_bull.append(kw)
+                      matched.append(kw)
               for kw in BEARISH_KEYWORDS:
                   if kw in text:
                       bear_score += 1
-                      matched_bear.append(kw)
-              return bull_score, bear_score, matched_bull, matched_bear
+              return bull_score, bear_score, matched
 
           def get_stock_data(ticker):
               try:
@@ -116,7 +114,7 @@ jobs:
                       'mktcap':  info.get('marketCap') or 0,
                       'vol':     info.get('volume') or 0,
                       'avg_vol': info.get('averageVolume') or 1,
-                      'name':    info.get('shortName', ticker),
+                      'name':    info.get('shortName', ticker)[:30],
                   }
               except:
                   return None
@@ -126,18 +124,10 @@ jobs:
               elif mktcap >= 1e6: return str(round(mktcap/1e6)) + 'M'
               return 'N/A'
 
-          def extract_ticker_from_news(news_item):
-              related = news_item.get('related', '')
-              if related:
-                  tickers = [t.strip() for t in related.split(',') if t.strip()]
-                  return tickers[:3]
-              return []
-
           def main():
               print('Starting News Catalyst Scanner...')
-              today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y %H:%M')
+              today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
 
-              # Watchlist สำหรับดึง news เฉพาะตัว
               WATCHLIST = [
                   'FCEL','ELPW','KEEL','PLUG','BE','BLDP',
                   'SMR','OKLO','NNE','IONQ','QBTS','QUBT',
@@ -148,51 +138,43 @@ jobs:
               ]
 
               results = []
+              cutoff = time.time() - 86400
 
-              # สแกน news ของแต่ละหุ้นใน watchlist
               for ticker in WATCHLIST:
                   news_list = get_company_news(ticker)
                   if not news_list:
                       continue
-
-                  # ดู news ล่าสุด 24 ชม.
-                  cutoff = time.time() - 86400
-                  recent_news = [n for n in news_list if n.get('datetime', 0) >= cutoff]
-                  if not recent_news:
+                  recent = [n for n in news_list if n.get('datetime', 0) >= cutoff]
+                  if not recent:
                       continue
 
                   total_bull = 0
                   total_bear = 0
-                  top_headlines = []
+                  headlines  = []
 
-                  for news in recent_news[:5]:
-                      headline = news.get('headline', '')
-                      summary  = news.get('summary', '')
-                      bull, bear, matched_bull, matched_bear = score_headline(headline, summary)
-                      total_bull += bull
-                      total_bear += bear
-                      if bull > 0:
-                          top_headlines.append(headline[:80])
+                  for news in recent[:5]:
+                      h = news.get('headline', '')
+                      s = news.get('summary', '')
+                      b, br, matched = score_headline(h, s)
+                      total_bull += b
+                      total_bear += br
+                      if b > 0 and h:
+                          headlines.append(h[:70])
 
-                  # ต้องมี bullish signal และไม่มี bearish มาก
                   if total_bull < 1 or total_bear >= 2:
                       continue
 
                   stock = get_stock_data(ticker)
                   if not stock:
                       continue
-
-                  # filter micro/small cap เท่านั้น
                   if stock['mktcap'] > 5e9:
                       continue
 
-                  # volume surge
                   vol_ratio = stock['vol'] / stock['avg_vol'] if stock['avg_vol'] > 0 else 0
-
-                  catalyst_score = total_bull * 20
-                  if vol_ratio >= 3: catalyst_score += 30
-                  elif vol_ratio >= 1.5: catalyst_score += 15
-                  if stock['mktcap'] < 500e6: catalyst_score += 10
+                  score = total_bull * 20
+                  if vol_ratio >= 3:   score += 30
+                  elif vol_ratio >= 1.5: score += 15
+                  if stock['mktcap'] < 500e6: score += 10
 
                   results.append({
                       'ticker':    ticker,
@@ -200,37 +182,31 @@ jobs:
                       'price':     stock['price'],
                       'mktcap':    stock['mktcap'],
                       'vol_ratio': vol_ratio,
-                      'score':     catalyst_score,
-                      'bull':      total_bull,
-                      'headlines': top_headlines[:2],
+                      'score':     score,
+                      'headlines': headlines[:1],
                   })
-
-                  time.sleep(0.3)  # rate limit
+                  time.sleep(0.3)
 
               results.sort(key=lambda x: -x['score'])
 
-              # ส่ง Telegram
-              send(
-                  '<b>📰 News Catalyst Scanner - ' + today + '</b>\n'
-                  'Pattern: M&A / AI / Contract / FDA / Volume Spike\n'
-                  'Micro-small cap only (Cap < $5B)\n'
-                  'High risk — verify before trading.'
-              )
+              send('News Catalyst Scanner - ' + today + '\nM&A / AI / Contract / FDA\nMicro-small cap only\nHigh risk — verify before trading.')
 
               if results:
-                  msg = '<b>🔥 News Catalyst Stocks</b>\n(Bullish news + Volume surge in last 24h)\n'
                   for i, s in enumerate(results[:TOP_N]):
-                      vol_str = str(round(s['vol_ratio'], 1)) + 'x vol' if s['vol_ratio'] > 0 else 'n/a'
-                      msg += '\n#' + str(i+1) + ' ' + s['ticker'] + ' - ' + s['name']
-                      msg += '\n  Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap'])
-                      msg += '\n  $' + str(round(s['price'], 2)) + ' | ' + vol_str
+                      vol_str = str(round(s['vol_ratio'], 1)) + 'x vol'
+                      headline_str = ''
                       if s['headlines']:
-                          msg += '\n  📰 ' + s['headlines'][0]
-                      if len(s['headlines']) > 1:
-                          msg += '\n  📰 ' + s['headlines'][1]
-                  send(msg)
+                          headline_str = '\n  ' + clean(s['headlines'][0])
+                      msg = (
+                          '#' + str(i+1) + ' ' + s['ticker'] + ' - ' + clean(s['name']) + '\n'
+                          'Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']) + '\n'
+                          '$' + str(round(s['price'], 2)) + ' | ' + vol_str
+                          + headline_str
+                      )
+                      send(msg)
+                      time.sleep(0.5)
               else:
-                  send('<b>📰 News Catalyst</b>\nNo strong catalyst stocks found today.')
+                  send('No catalyst stocks found today.')
 
               print('Done.')
 
