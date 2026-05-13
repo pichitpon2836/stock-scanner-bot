@@ -1,0 +1,245 @@
+name: News Catalyst Scanner
+
+on:
+  schedule:
+    - cron: '0 1 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests yfinance pytz curl_cffi
+
+      - name: Write news_bot.py
+        run: |
+          cat > news_bot.py << 'PYEOF'
+          import os, time, requests, yfinance as yf, pytz
+          from curl_cffi import requests as cffi_requests
+          from datetime import datetime, timedelta
+
+          BOT_TOKEN    = os.environ['TELEGRAM_BOT_TOKEN']
+          CHAT_ID      = os.environ['TELEGRAM_CHAT_ID']
+          FINNHUB_KEY  = os.environ['FINNHUB_API_KEY']
+          TIMEZONE     = 'Asia/Bangkok'
+          TOP_N        = 5
+
+          # Keywords ที่บ่งบอก catalyst แรง
+          BULLISH_KEYWORDS = [
+              'acquisition', 'merger', 'buyout', 'takeover',
+              'partnership', 'agreement', 'contract', 'deal',
+              'fda approval', 'fda approved', 'clearance',
+              'breakthrough', 'exclusive', 'license',
+              'ai', 'artificial intelligence',
+              'nasdaq compliance', 'uplisting',
+              'revenue', 'earnings beat', 'record',
+              'investment', 'funding', 'raise',
+          ]
+
+          # Keywords ที่ต้องระวัง (bearish)
+          BEARISH_KEYWORDS = [
+              'delisting', 'bankruptcy', 'default', 'fraud',
+              'sec investigation', 'lawsuit', 'recall',
+              'guidance cut', 'workforce reduction', 'layoff',
+          ]
+
+          def send(text):
+              r = requests.post(
+                  'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                  json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
+                  timeout=15,
+              )
+              r.raise_for_status()
+              time.sleep(0.5)
+
+          def get_market_news():
+              url = 'https://finnhub.io/api/v1/news'
+              params = {'category': 'general', 'token': FINNHUB_KEY}
+              try:
+                  r = requests.get(url, params=params, timeout=10)
+                  return r.json() if r.status_code == 200 else []
+              except:
+                  return []
+
+          def get_company_news(ticker):
+              today = datetime.now().strftime('%Y-%m-%d')
+              yesterday = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
+              url = 'https://finnhub.io/api/v1/company-news'
+              params = {
+                  'symbol': ticker,
+                  'from': yesterday,
+                  'to': today,
+                  'token': FINNHUB_KEY,
+              }
+              try:
+                  r = requests.get(url, params=params, timeout=10)
+                  return r.json() if r.status_code == 200 else []
+              except:
+                  return []
+
+          def score_headline(headline, summary=''):
+              text = (headline + ' ' + summary).lower()
+              bull_score = 0
+              bear_score = 0
+              matched_bull = []
+              matched_bear = []
+              for kw in BULLISH_KEYWORDS:
+                  if kw in text:
+                      bull_score += 1
+                      matched_bull.append(kw)
+              for kw in BEARISH_KEYWORDS:
+                  if kw in text:
+                      bear_score += 1
+                      matched_bear.append(kw)
+              return bull_score, bear_score, matched_bull, matched_bear
+
+          def get_stock_data(ticker):
+              try:
+                  session = cffi_requests.Session(impersonate='chrome')
+                  info = yf.Ticker(ticker, session=session).info
+                  price = info.get('currentPrice') or info.get('regularMarketPrice')
+                  if not price:
+                      return None
+                  return {
+                      'price':   float(price),
+                      'mktcap':  info.get('marketCap') or 0,
+                      'vol':     info.get('volume') or 0,
+                      'avg_vol': info.get('averageVolume') or 1,
+                      'name':    info.get('shortName', ticker),
+                  }
+              except:
+                  return None
+
+          def fmt_cap(mktcap):
+              if mktcap >= 1e9:   return str(round(mktcap/1e9, 1)) + 'B'
+              elif mktcap >= 1e6: return str(round(mktcap/1e6)) + 'M'
+              return 'N/A'
+
+          def extract_ticker_from_news(news_item):
+              related = news_item.get('related', '')
+              if related:
+                  tickers = [t.strip() for t in related.split(',') if t.strip()]
+                  return tickers[:3]
+              return []
+
+          def main():
+              print('Starting News Catalyst Scanner...')
+              today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y %H:%M')
+
+              # Watchlist สำหรับดึง news เฉพาะตัว
+              WATCHLIST = [
+                  'FCEL','ELPW','KEEL','PLUG','BE','BLDP',
+                  'SMR','OKLO','NNE','IONQ','QBTS','QUBT',
+                  'BBAI','SOUN','APLD','ARRY','NOVA',
+                  'MVST','ENVX','ASTS','ACHR','JOBY',
+                  'SMCI','COHR','VRT','TDIC','BWEN',
+                  'BZFD','STAK','ERNA','HTCO','GAUZ',
+              ]
+
+              results = []
+
+              # สแกน news ของแต่ละหุ้นใน watchlist
+              for ticker in WATCHLIST:
+                  news_list = get_company_news(ticker)
+                  if not news_list:
+                      continue
+
+                  # ดู news ล่าสุด 24 ชม.
+                  cutoff = time.time() - 86400
+                  recent_news = [n for n in news_list if n.get('datetime', 0) >= cutoff]
+                  if not recent_news:
+                      continue
+
+                  total_bull = 0
+                  total_bear = 0
+                  top_headlines = []
+
+                  for news in recent_news[:5]:
+                      headline = news.get('headline', '')
+                      summary  = news.get('summary', '')
+                      bull, bear, matched_bull, matched_bear = score_headline(headline, summary)
+                      total_bull += bull
+                      total_bear += bear
+                      if bull > 0:
+                          top_headlines.append(headline[:80])
+
+                  # ต้องมี bullish signal และไม่มี bearish มาก
+                  if total_bull < 1 or total_bear >= 2:
+                      continue
+
+                  stock = get_stock_data(ticker)
+                  if not stock:
+                      continue
+
+                  # filter micro/small cap เท่านั้น
+                  if stock['mktcap'] > 5e9:
+                      continue
+
+                  # volume surge
+                  vol_ratio = stock['vol'] / stock['avg_vol'] if stock['avg_vol'] > 0 else 0
+
+                  catalyst_score = total_bull * 20
+                  if vol_ratio >= 3: catalyst_score += 30
+                  elif vol_ratio >= 1.5: catalyst_score += 15
+                  if stock['mktcap'] < 500e6: catalyst_score += 10
+
+                  results.append({
+                      'ticker':    ticker,
+                      'name':      stock['name'],
+                      'price':     stock['price'],
+                      'mktcap':    stock['mktcap'],
+                      'vol_ratio': vol_ratio,
+                      'score':     catalyst_score,
+                      'bull':      total_bull,
+                      'headlines': top_headlines[:2],
+                  })
+
+                  time.sleep(0.3)  # rate limit
+
+              results.sort(key=lambda x: -x['score'])
+
+              # ส่ง Telegram
+              send(
+                  '<b>📰 News Catalyst Scanner - ' + today + '</b>\n'
+                  'Pattern: M&A / AI / Contract / FDA / Volume Spike\n'
+                  'Micro-small cap only (Cap < $5B)\n'
+                  'High risk — verify before trading.'
+              )
+
+              if results:
+                  msg = '<b>🔥 News Catalyst Stocks</b>\n(Bullish news + Volume surge in last 24h)\n'
+                  for i, s in enumerate(results[:TOP_N]):
+                      vol_str = str(round(s['vol_ratio'], 1)) + 'x vol' if s['vol_ratio'] > 0 else 'n/a'
+                      msg += '\n#' + str(i+1) + ' ' + s['ticker'] + ' - ' + s['name']
+                      msg += '\n  Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap'])
+                      msg += '\n  $' + str(round(s['price'], 2)) + ' | ' + vol_str
+                      if s['headlines']:
+                          msg += '\n  📰 ' + s['headlines'][0]
+                      if len(s['headlines']) > 1:
+                          msg += '\n  📰 ' + s['headlines'][1]
+                  send(msg)
+              else:
+                  send('<b>📰 News Catalyst</b>\nNo strong catalyst stocks found today.')
+
+              print('Done.')
+
+          main()
+          PYEOF
+
+      - name: Run news scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: python news_bot.py
