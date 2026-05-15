@@ -27,33 +27,30 @@ jobs:
           cat > nanocap_bot.py << 'PYEOF'
           import os, time, requests, yfinance as yf, pytz, html
           from curl_cffi import requests as cffi_requests
-          from datetime import datetime
+          from datetime import datetime, timedelta
 
           BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
           CHAT_ID   = os.environ['TELEGRAM_CHAT_ID']
           TIMEZONE  = 'Asia/Bangkok'
           TOP_N     = 5
 
-          # Nano cap watchlist — ราคา < $5, cap < $50M
-          # Hot narrative: Energy Storage, AI, Clean Energy, Biotech, Gaming
           WATCHLIST = [
-              # Energy Storage / Clean
-              'BNRG','HTOO','VGAS','SUUN','WAVE','NXXT',
-              'ALCE','AESI','AMPE','CBAT','NKLA','GOEV',
+              # Portfolio / Known winners
+              'CREG','DXF','SNAL','BNRG','LESL',
+              'KEEL','ELPW','FCEL','BWEN','BZFD','STAK',
+              'ERNA','HTCO','GAUZ','CPHI','WOK',
+              # China-linked US listed nano
+              'TDIC','SXTC','RETO','BIMI','CIFS','CNTB',
+              'HPNN','CODA','CIFS','ACMR',
+              # Energy Storage / Clean nano
+              'BNRG','HTOO','VGAS','SUUN','AMPE','CBAT',
+              'NKLA','GOEV','MULN','BLNK','AMBO',
               # AI / Tech nano
-              'DXF','AIXI','GFAI','CODA','AEYE','SOUN',
-              'BBAI','MIND','CIFS','CNTB',
-              # Gaming / Media
-              'SNAL','GMGI','GFAI','GAME','NERD',
+              'AIXI','GFAI','AEYE','MIND','AIOT',
               # Biotech nano
-              'PRAX','PHAT','LWAY','ADMA','ERNA',
-              'HTCO','CPHI','WOK','GAUZ',
-              # China/HK nano listed US
-              'TDIC','SXTC','RETO','BIMI','CIFS',
-              # Energy / Power nano
-              'BWEN','AMBO','HPNN','MULN','BLNK',
-              # Other momentum nano
-              'STAK','BZFD','KEEL','ELPW',
+              'PRAX','PHAT','LWAY','ADMA',
+              # Gaming / Media nano
+              'GMGI','GAME','NERD',
           ]
           WATCHLIST = list(dict.fromkeys(WATCHLIST))
 
@@ -87,6 +84,25 @@ jobs:
                   trs.append(tr)
               return sum(trs)/len(trs) if trs else 0
 
+          def detect_reverse_split(hist):
+              # ตรวจจับ reverse split จาก price gap ผิดปกติ
+              if hist.empty or len(hist) < 30: return False, 0
+              closes = hist['Close'].values
+              for i in range(1, min(90, len(closes)-1)):
+                  ratio = closes[-(i+1)] / closes[-i] if closes[-i] > 0 else 0
+                  if ratio >= 3:  # ราคาเพิ่มขึ้น 3x+ ใน 1 วัน = reverse split
+                      return True, round(ratio)
+              return False, 0
+
+          def check_nasdaq_compliance(price, hist):
+              # ตรวจสอบว่าราคาเคยต่ำกว่า $1 ใน 6 เดือน
+              if hist.empty: return False
+              closes = hist['Close'].values
+              lookback = closes[-126:] if len(closes) >= 126 else closes
+              was_below_1 = any(c < 1.0 for c in lookback)
+              near_compliance = price < 2.0
+              return was_below_1 or near_compliance
+
           def fetch(ticker):
               try:
                   session = cffi_requests.Session(impersonate='chrome')
@@ -94,9 +110,7 @@ jobs:
                   info = t.info
                   price = info.get('currentPrice') or info.get('regularMarketPrice')
                   if not price or price <= 0: return None
-
-                  # filter: ราคา < $10 เท่านั้น
-                  if price > 10: return None
+                  if price > 15: return None  # ขยาย filter จาก $10 เป็น $15
 
                   hist = t.history(period='1y')
                   if hist.empty or len(hist) < 5: return None
@@ -111,26 +125,33 @@ jobs:
                   last_vol   = float(volumes.iloc[-1])
                   ret_1w  = float((closes.iloc[-1]-closes.iloc[-6]) /closes.iloc[-6])  if len(closes) >= 6  else 0
                   ret_1m  = float((closes.iloc[-1]-closes.iloc[-22])/closes.iloc[-22]) if len(closes) >= 22 else 0
-                  mktcap  = info.get('marketCap') or 0
+                  ret_3m  = float((closes.iloc[-1]-closes.iloc[-66])/closes.iloc[-66]) if len(closes) >= 66 else 0
+
+                  has_rsplit, rsplit_ratio = detect_reverse_split(hist)
+                  nasdaq_risk = check_nasdaq_compliance(float(price), hist)
 
                   return {
-                      'ticker':      ticker,
-                      'name':        info.get('shortName', ticker)[:25],
-                      'price':       float(price),
-                      'mktcap':      mktcap,
-                      'atr':         atr,
-                      'atr_pct':     (atr/float(price)*100) if price > 0 else 0,
-                      'high52':      float(high52),
-                      'low52':       float(low52),
-                      'vol_ratio':   float(last_vol/avg_vol_20) if avg_vol_20 > 0 else 0,
-                      'vol_surge':   float(avg_vol_5/avg_vol_20) if avg_vol_20 > 0 else 0,
-                      'ret_1w':      ret_1w,
-                      'ret_1m':      ret_1m,
-                      'short_pct':   info.get('shortPercentOfFloat') or 0,
+                      'ticker':       ticker,
+                      'name':         info.get('shortName', ticker)[:25],
+                      'price':        float(price),
+                      'mktcap':       info.get('marketCap') or 0,
+                      'atr':          atr,
+                      'atr_pct':      (atr/float(price)*100) if price > 0 else 0,
+                      'high52':       float(high52),
+                      'low52':        float(low52),
+                      'vol_ratio':    float(last_vol/avg_vol_20) if avg_vol_20 > 0 else 0,
+                      'vol_surge':    float(avg_vol_5/avg_vol_20) if avg_vol_20 > 0 else 0,
+                      'ret_1w':       ret_1w,
+                      'ret_1m':       ret_1m,
+                      'ret_3m':       ret_3m,
+                      'short_pct':    info.get('shortPercentOfFloat') or 0,
                       'pct_from_low': (float(price)-float(low52))/float(low52) if low52 > 0 else 0,
                       'pct_from_high':(float(high52)-float(price))/float(high52) if high52 > 0 else 1,
-                      'sector':      info.get('sector', ''),
-                      'desc':        (info.get('longBusinessSummary') or '')[:80],
+                      'has_rsplit':   has_rsplit,
+                      'rsplit_ratio': rsplit_ratio,
+                      'nasdaq_risk':  nasdaq_risk,
+                      'country':      info.get('country', ''),
+                      'desc':         (info.get('longBusinessSummary') or '')[:80],
                   }
               except Exception as e:
                   print(ticker + ' error: ' + str(e))
@@ -139,69 +160,78 @@ jobs:
           def nano_score(d):
               score = 0
               signals = []
+              tags = []
 
-              # ต้องเป็น nano/micro cap
-              if d['mktcap'] > 50e6:
-                  score -= 10  # ไม่ disqualify แต่ลดคะแนน
+              # === CREG Pattern Signals ===
 
-              # ราคาใกล้ Nasdaq compliance limit ($1)
+              # 1. Reverse split history (สำคัญมาก)
+              if d['has_rsplit']:
+                  score += 20
+                  signals.append('Rev Split ' + str(d['rsplit_ratio']) + 'x')
+                  tags.append('RSPLIT')
+
+              # 2. Nasdaq compliance risk (ราคาเคยต่ำกว่า $1)
+              if d['nasdaq_risk']:
+                  score += 15
+                  signals.append('Nasdaq Risk')
+                  tags.append('COMPLIANCE')
+
+              # 3. China-linked (บริษัทจีนจดทะเบียน US)
+              if d['country'] in ('China', 'Hong Kong'):
+                  score += 10
+                  signals.append('China-US listed')
+                  tags.append('CHINA')
+
+              # 4. ราคาต่ำ (near $1 floor = explosive)
               if d['price'] < 1.5:
-                  score += 15
-                  signals.append('Near $1 floor')
+                  score += 15; signals.append('Price $' + str(round(d['price'],4)))
               elif d['price'] < 3:
-                  score += 10
-                  signals.append('Low price $' + str(round(d['price'],2)))
+                  score += 10; signals.append('Price $' + str(round(d['price'],2)))
+              elif d['price'] < 5:
+                  score += 5;  signals.append('Price $' + str(round(d['price'],2)))
 
-              # Volume surge — สัญญาณสำคัญที่สุด
+              # 5. Volume surge (สัญญาณสำคัญ)
               if d['vol_ratio'] >= 10:
-                  score += 35
-                  signals.append('Vol ' + str(round(d['vol_ratio'],0)) + 'x')
+                  score += 35; signals.append('Vol ' + str(round(d['vol_ratio'],0)) + 'x')
               elif d['vol_ratio'] >= 5:
-                  score += 25
-                  signals.append('Vol ' + str(round(d['vol_ratio'],1)) + 'x')
+                  score += 25; signals.append('Vol ' + str(round(d['vol_ratio'],1)) + 'x')
               elif d['vol_ratio'] >= 2:
-                  score += 12
-                  signals.append('Vol ' + str(round(d['vol_ratio'],1)) + 'x')
+                  score += 12; signals.append('Vol ' + str(round(d['vol_ratio'],1)) + 'x')
 
-              # 5-day volume surge
+              # 6. 5-day volume trend
               if d['vol_surge'] >= 3:
-                  score += 15
-                  signals.append('5D VolSurge ' + str(round(d['vol_surge'],1)) + 'x')
+                  score += 15; signals.append('5D Surge ' + str(round(d['vol_surge'],1)) + 'x')
               elif d['vol_surge'] >= 1.5:
-                  score += 8
-                  signals.append('5D VolSurge ' + str(round(d['vol_surge'],1)) + 'x')
+                  score += 8;  signals.append('5D Surge ' + str(round(d['vol_surge'],1)) + 'x')
 
-              # Weekly momentum
-              if d['ret_1w'] >= 0.30:
-                  score += 25
-                  signals.append('1W +' + str(round(d['ret_1w']*100)) + '%')
-              elif d['ret_1w'] >= 0.15:
-                  score += 15
-                  signals.append('1W +' + str(round(d['ret_1w']*100)) + '%')
+              # 7. Weekly momentum
+              if d['ret_1w'] >= 0.50:
+                  score += 30; signals.append('1W +' + str(round(d['ret_1w']*100)) + '%')
+              elif d['ret_1w'] >= 0.20:
+                  score += 20; signals.append('1W +' + str(round(d['ret_1w']*100)) + '%')
               elif d['ret_1w'] >= 0.05:
-                  score += 8
-                  signals.append('1W +' + str(round(d['ret_1w']*100)) + '%')
+                  score += 10; signals.append('1W +' + str(round(d['ret_1w']*100)) + '%')
 
-              # Near 52W low (early stage)
-              if d['pct_from_low'] <= 0.30:
-                  score += 10
-                  signals.append('Low+' + str(round(d['pct_from_low']*100)) + '%')
+              # 8. Near 52W low = early stage
+              if d['pct_from_low'] <= 0.20:
+                  score += 15; signals.append('Near Low +' + str(round(d['pct_from_low']*100)) + '%')
+              elif d['pct_from_low'] <= 0.50:
+                  score += 8;  signals.append('Low+' + str(round(d['pct_from_low']*100)) + '%')
 
-              # Short squeeze potential
-              if d['short_pct'] >= 0.10:
-                  score += 15
-                  signals.append('Short ' + str(round(d['short_pct']*100,1)) + '%')
-              elif d['short_pct'] >= 0.05:
-                  score += 8
-                  signals.append('Short ' + str(round(d['short_pct']*100,1)) + '%')
+              # 9. Short squeeze potential
+              if d['short_pct'] >= 0.15:
+                  score += 20; signals.append('Short ' + str(round(d['short_pct']*100,1)) + '% SQUEEZE')
+              elif d['short_pct'] >= 0.08:
+                  score += 12; signals.append('Short ' + str(round(d['short_pct']*100,1)) + '%')
+              elif d['short_pct'] >= 0.04:
+                  score += 6;  signals.append('Short ' + str(round(d['short_pct']*100,1)) + '%')
 
-              if score < 25:
-                  return None
+              if score < 25: return None
 
               # ATR-based SL/TP (nano cap ใช้ 3xATR เพราะ volatile มาก)
               p   = d['price']
-              atr = d['atr'] if d['atr'] > 0 else p * 0.08
-              sl  = round(max(p - 3.0*atr, 0.01), 4)
+              atr = d['atr'] if d['atr'] > 0 else p * 0.10
+              sl  = round(max(p - 3.0*atr, 0.0001), 4)
               tp1 = round(p + 2.0*atr, 4)
               tp2 = round(p + 5.0*atr, 4)
               tp3 = round(p + 10.0*atr, 4)
@@ -220,7 +250,9 @@ jobs:
                   'vol_ratio': d['vol_ratio'],
                   'ret_1w':    d['ret_1w'],
                   'ret_1m':    d['ret_1m'],
+                  'ret_3m':    d['ret_3m'],
                   'high52':    d['high52'],
+                  'tags':      ' '.join(['['+t+']' for t in tags]),
                   'metrics':   ' / '.join(signals) if signals else 'n/a',
                   'desc':      html.escape(d['desc']),
                   'sl':  sl,  'sl_pct':  sl_pct,
@@ -250,23 +282,25 @@ jobs:
 
               send(
                   'Nano Cap Squeeze Scanner - ' + today + '\n'
-                  'Price < $10 | Cap < $50M\n'
-                  'Pattern: Low price + Volume Spike + Narrative\n'
+                  'Pattern: Reverse Split + Compliance Risk + China-US + Volume\n'
+                  'Price < $15 | EXTREME RISK\n'
                   'SL=3xATR / TP=2/5/10xATR\n'
-                  'EXTREME RISK — small size only'
+                  'Small size only — verify before trading.'
               )
 
               if results:
                   for i, s in enumerate(results[:TOP_N]):
                       vol_str = str(round(s['vol_ratio'],1)) + 'x vol'
-                      ret1w_str = ('+' if s['ret_1w'] >= 0 else '') + str(round(s['ret_1w']*100,1)) + '%'
-                      ret1m_str = ('+' if s['ret_1m'] >= 0 else '') + str(round(s['ret_1m']*100,1)) + '%'
+                      r1w = ('+' if s['ret_1w'] >= 0 else '') + str(round(s['ret_1w']*100,1)) + '%'
+                      r1m = ('+' if s['ret_1m'] >= 0 else '') + str(round(s['ret_1m']*100,1)) + '%'
+                      r3m = ('+' if s['ret_3m'] >= 0 else '') + str(round(s['ret_3m']*100,1)) + '%'
                       msg = (
                           '#' + str(i+1) + ' ' + s['ticker'] + ' - ' + s['name'] + '\n'
-                          'Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']) + ' | ATR: ' + str(round(s['atr_pct'],1)) + '%/day\n'
-                          '1W: ' + ret1w_str + ' | 1M: ' + ret1m_str + ' | ' + vol_str + '\n'
+                          + (s['tags'] + '\n' if s['tags'] else '')
+                          + 'Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']) + ' | ATR: ' + str(round(s['atr_pct'],1)) + '%/day\n'
+                          '1W: ' + r1w + ' | 1M: ' + r1m + ' | 3M: ' + r3m + ' | ' + vol_str + '\n'
                           '52W High: $' + str(round(s['high52'],4)) + '\n'
-                          'Buy:  $' + str(s['tp1']*0+round(s['price'],4)) + '\n'
+                          'Buy:  $' + str(round(s['price'],4)) + '\n'
                           'SL:   $' + str(s['sl'])  + ' (' + str(s['sl_pct'])  + '%)\n'
                           'TP1:  $' + str(s['tp1']) + ' (+' + str(s['tp1_pct']) + '%)\n'
                           'TP2:  $' + str(s['tp2']) + ' (+' + str(s['tp2_pct']) + '%)\n'
