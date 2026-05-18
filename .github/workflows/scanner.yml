@@ -8,7 +8,7 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45  # เพิ่มจาก 30 → 45 (scan 90+ tickers)
 
     steps:
       - name: Checkout
@@ -20,7 +20,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yfinance requests pytz curl_cffi
+        run: pip install -r requirements.txt  # ✅ ใช้ requirements.txt แทน hardcode
 
       - name: Write bot.py
         run: |
@@ -49,6 +49,7 @@ jobs:
           ]
           WATCHLIST = list(dict.fromkeys(WATCHLIST))
 
+          # ✅ PATCHED: send() มี full fallback — strip <i> ด้วย
           def send(text):
               if len(text) > 4000: text = text[:3990] + '...'
               try:
@@ -58,9 +59,13 @@ jobs:
                       timeout=15,
                   )
                   if r.status_code != 200:
+                      plain = (text
+                          .replace('<b>','').replace('</b>','')
+                          .replace('<i>','').replace('</i>','')
+                      )
                       requests.post(
                           'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
-                          json={'chat_id': CHAT_ID, 'text': text.replace('<b>','').replace('</b>','')},
+                          json={'chat_id': CHAT_ID, 'text': plain},
                           timeout=15,
                       )
               except Exception as e:
@@ -293,27 +298,27 @@ jobs:
               mini.sort(key=lambda x: (-x['score'], x['pct_from_high']))
               rr.sort(key=lambda x: (-x['score'], -x['upside']))
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-              send('Daily Scan - ' + today + '\nBUY ZONE / WATCH / SEPA / RE-RATING\nSL/TP based on ATR 14d per stock\nScanned ' + str(len(WATCHLIST)) + ' stocks')
+              send('<b>Daily Scan - ' + today + '</b>\nBUY ZONE / WATCH / SEPA / RE-RATING\nSL/TP based on ATR 14d per stock\nScanned ' + str(len(WATCHLIST)) + ' stocks')
               if buf:
-                  send('WARREN BUFFETT Style\n(Fair=EPS x 22 / Buy=Fair x 0.85 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
+                  send('<b>WARREN BUFFETT Style</b>\n(Fair=EPS x 22 / Buy=Fair x 0.85 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
               else:
-                  send('WARREN BUFFETT Style\nNo stocks today.')
+                  send('<b>WARREN BUFFETT Style</b>\nNo stocks today.')
               if lyn:
-                  send('PETER LYNCH Style\n(Fair=EPS x Growth / Buy=Fair x 0.95 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s, 'Fast Grower: ') for i, s in enumerate(lyn[:TOP_N])))
+                  send('<b>PETER LYNCH Style</b>\n(Fair=EPS x Growth / Buy=Fair x 0.95 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s, 'Fast Grower: ') for i, s in enumerate(lyn[:TOP_N])))
               else:
-                  send('PETER LYNCH Style\nNo stocks today.')
+                  send('<b>PETER LYNCH Style</b>\nNo stocks today.')
               if slp:
-                  send('NICK SLEEP Style\n(Fair=FCF/0.04 / Buy=Fair x 0.90 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N])))
+                  send('<b>NICK SLEEP Style</b>\n(Fair=FCF/0.04 / Buy=Fair x 0.90 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N])))
               else:
-                  send('NICK SLEEP Style\nNo stocks today.')
+                  send('<b>NICK SLEEP Style</b>\nNo stocks today.')
               if mini:
-                  send('MINERVINI SEPA Style\n(Price>MA50>MA200 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
+                  send('<b>MINERVINI SEPA Style</b>\n(Price>MA50>MA200 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
               else:
-                  send('MINERVINI SEPA Style\nNo stocks today.')
+                  send('<b>MINERVINI SEPA Style</b>\nNo stocks today.')
               if rr:
-                  send('RE-RATING Scanner\n(Low PE/PB + ROIC + Insider / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
+                  send('<b>RE-RATING Scanner</b>\n(Low PE/PB + ROIC + Insider / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
               else:
-                  send('RE-RATING Scanner\nNo stocks today.')
+                  send('<b>RE-RATING Scanner</b>\nNo stocks today.')
               print('Done.')
 
           main()
