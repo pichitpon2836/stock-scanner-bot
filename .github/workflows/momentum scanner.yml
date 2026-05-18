@@ -8,7 +8,7 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45  # เพิ่มจาก 30 → 45
 
     steps:
       - name: Checkout
@@ -20,7 +20,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yfinance requests pytz curl_cffi
+        run: pip install -r requirements.txt
 
       - name: Write momentum_bot.py
         run: |
@@ -46,19 +46,35 @@ jobs:
               'SMCI','COHR','VRT','PATH',
               'PRCT','GTLB','OPEN','AIOT',
           ]
-
           WATCHLIST = list(dict.fromkeys(WATCHLIST))
 
+          # ✅ PATCHED: send() มี fallback + ไม่ raise_for_status() ที่ทำให้ run พัง
           def send(text):
-              r = requests.post(
-                  'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
-                  json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
-                  timeout=15,
-              )
-              r.raise_for_status()
+              if len(text) > 4000:
+                  text = text[:3990] + '...'
+              try:
+                  r = requests.post(
+                      'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                      json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
+                      timeout=15,
+                  )
+                  if r.status_code != 200:
+                      # Fallback: ส่งแบบ plain text ถ้า HTML parse error
+                      plain = (text
+                          .replace('<b>','').replace('</b>','')
+                          .replace('<i>','').replace('</i>','')
+                      )
+                      requests.post(
+                          'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                          json={'chat_id': CHAT_ID, 'text': plain},
+                          timeout=15,
+                      )
+              except Exception as e:
+                  print('Telegram error: ' + str(e))
               time.sleep(0.5)
 
           def calc_atr(hist, period=14):
+              if hist.empty or len(hist) < 2: return 0
               highs  = hist['High'].values
               lows   = hist['Low'].values
               closes = hist['Close'].values
@@ -94,7 +110,7 @@ jobs:
                   ret_1w  = (closes.iloc[-1] - closes.iloc[-6])  / closes.iloc[-6]  if len(closes) >= 6  else 0
                   ret_1m  = (closes.iloc[-1] - closes.iloc[-22]) / closes.iloc[-22] if len(closes) >= 22 else 0
                   ret_3m  = (closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66] if len(closes) >= 66 else 0
-                  atr = calc_atr(hist, 14)
+                  atr     = calc_atr(hist, 14)
                   atr_pct = (atr / float(price)) * 100
                   return {
                       'ticker':        ticker,
@@ -221,9 +237,9 @@ jobs:
                   '  Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']) + ' | ATR: ' + str(round(s['atr_pct'], 1)) + '%/day',
                   '  Buy: $' + str(round(s['price'], 2)),
                   '  SL:  $' + str(s['sl'])  + ' (' + str(s['sl_pct'])  + '%)',
-                  '  TP1: $' + str(s['tp1']) + ' (' + str(s['tp1_pct']) + '%)',
-                  '  TP2: $' + str(s['tp2']) + ' (' + str(s['tp2_pct']) + '%)',
-                  '  TP3: $' + str(s['tp3']) + ' (' + str(s['tp3_pct']) + '%)',
+                  '  TP1: $' + str(s['tp1']) + ' (+' + str(s['tp1_pct']) + '%)',
+                  '  TP2: $' + str(s['tp2']) + ' (+' + str(s['tp2_pct']) + '%)',
+                  '  TP3: $' + str(s['tp3']) + ' (+' + str(s['tp3_pct']) + '%)',
                   '  ' + s['metrics'],
               ]
               if s['desc']: lines.append('  ' + s['desc'])
@@ -236,9 +252,9 @@ jobs:
                   '  Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']) + ' | ATR: ' + str(round(s['atr_pct'], 1)) + '%/day',
                   '  Buy: $' + str(round(s['price'], 2)),
                   '  SL:  $' + str(s['sl'])  + ' (' + str(s['sl_pct'])  + '%)',
-                  '  TP1: $' + str(s['tp1']) + ' (' + str(s['tp1_pct']) + '%)',
-                  '  TP2: $' + str(s['tp2']) + ' (' + str(s['tp2_pct']) + '%)',
-                  '  TP3: $' + str(s['tp3']) + ' (' + str(s['tp3_pct']) + '%)',
+                  '  TP1: $' + str(s['tp1']) + ' (+' + str(s['tp1_pct']) + '%)',
+                  '  TP2: $' + str(s['tp2']) + ' (+' + str(s['tp2_pct']) + '%)',
+                  '  TP3: $' + str(s['tp3']) + ' (+' + str(s['tp3_pct']) + '%)',
                   '  ' + s['metrics'],
               ]
               if s['desc']: lines.append('  ' + s['desc'])
@@ -259,26 +275,26 @@ jobs:
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
               send(
                   '<b>Momentum Scanner - ' + today + '</b>\n'
-                  '🔥 SHORT SQUEEZE | 🚀 BREAKOUT\n'
+                  'SHORT SQUEEZE | BREAKOUT\n'
                   'SL/TP คำนวณจาก ATR 14 วันของแต่ละหุ้น\n'
                   'High risk — verify before trading.'
               )
               if sq_list:
                   send(
-                      '<b>🔥 SHORT SQUEEZE Setup</b>\n'
+                      '<b>SHORT SQUEEZE Setup</b>\n'
                       '(SL=2xATR / TP1=2xATR / TP2=4xATR / TP3=8xATR)'
                       + ''.join(fmt_sq(i+1, s) for i, s in enumerate(sq_list[:TOP_N]))
                   )
               else:
-                  send('<b>🔥 SHORT SQUEEZE</b>\nNo setups today.')
+                  send('<b>SHORT SQUEEZE</b>\nNo setups today.')
               if bo_list:
                   send(
-                      '<b>🚀 BREAKOUT Momentum</b>\n'
+                      '<b>BREAKOUT Momentum</b>\n'
                       '(SL=1.5xATR / TP1=1.5xATR / TP2=3xATR / TP3=6xATR)'
                       + ''.join(fmt_bo(i+1, s) for i, s in enumerate(bo_list[:TOP_N]))
                   )
               else:
-                  send('<b>🚀 BREAKOUT Momentum</b>\nNo breakouts today.')
+                  send('<b>BREAKOUT Momentum</b>\nNo breakouts today.')
               print('Done.')
 
           main()

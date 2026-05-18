@@ -8,7 +8,7 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45  # เพิ่มจาก 30 → 45 เพราะ scan 85 tickers
 
     steps:
       - name: Checkout
@@ -20,7 +20,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yfinance requests pytz curl_cffi
+        run: pip install -r requirements.txt
 
       - name: Write rs_bot.py
         run: |
@@ -34,7 +34,6 @@ jobs:
           TIMEZONE  = 'Asia/Bangkok'
           TOP_N     = 5
 
-          # Theme-based watchlist (จาก TradersLab structure)
           THEMES = {
               'Power Semiconductors':    ['ALGM','MPWR','ONSEMI','ON','STM','WOLF','AEHR'],
               'Memory':                  ['MU','WDC','SKX','LSCC','MRVL','RMBS','NAND'],
@@ -50,9 +49,9 @@ jobs:
               'AI Services':             ['PATH','BBAI','SOUN','GTLB','DDOG','NET','CRWD'],
           }
 
-          # Benchmark สำหรับคำนวณ RS (SPY = S&P 500)
           BENCHMARK = 'SPY'
 
+          # ✅ PATCHED: send() มี fallback
           def send(text):
               if len(text) > 4000: text = text[:3990] + '...'
               try:
@@ -62,7 +61,10 @@ jobs:
                       timeout=15,
                   )
                   if r.status_code != 200:
-                      plain = text.replace('<b>','').replace('</b>','')
+                      plain = (text
+                          .replace('<b>','').replace('</b>','')
+                          .replace('<i>','').replace('</i>','')
+                      )
                       requests.post(
                           'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
                           json={'chat_id': CHAT_ID, 'text': plain},
@@ -84,7 +86,6 @@ jobs:
               return sum(trs)/len(trs) if trs else 0
 
           def calc_rs_rating(stock_ret_12m, spy_ret_12m, all_rets):
-              # RS Rating = percentile rank ของ return เทียบกับ universe ทั้งหมด
               if not all_rets: return 50
               rank = sum(1 for r in all_rets if r < stock_ret_12m)
               return round(rank / len(all_rets) * 100)
@@ -148,8 +149,6 @@ jobs:
           def score_setup(d, rs_rating, spy_ret):
               score = 0
               signals = []
-
-              # RS Rating (most important)
               if rs_rating >= 90:
                   score += 40; signals.append('RS ' + str(rs_rating))
               elif rs_rating >= 80:
@@ -158,8 +157,6 @@ jobs:
                   score += 15; signals.append('RS ' + str(rs_rating))
               else:
                   return None, []
-
-              # 21 DMA Structure (pullback to MA21 = buy zone)
               pfm = d['pct_from_ma21']
               if -0.03 <= pfm <= 0.05:
                   score += 30; signals.append('At 21DMA')
@@ -167,21 +164,14 @@ jobs:
                   score += 20; signals.append(str(round(pfm*100, 1)) + '% from 21DMA')
               elif pfm > 0.10:
                   score += 5; signals.append(str(round(pfm*100, 1)) + '% above 21DMA')
-
-              # Trend structure
               if d['price'] > d['ma50'] > d['ma200']:
                   score += 15; signals.append('MA stack')
-
-              # Near 52W high (strong stock)
               if d['pct_from_high'] <= 0.05:
                   score += 15; signals.append('At 52W High')
               elif d['pct_from_high'] <= 0.15:
                   score += 8; signals.append(str(round(d['pct_from_high']*100)) + '% from High')
-
-              # Outperforming market
               if d['ret_12m'] > spy_ret * 1.5:
                   score += 10; signals.append('12M >' + str(round(d['ret_12m']*100)) + '%')
-
               return score, signals
 
           def fmt_cap(mktcap):
@@ -192,54 +182,37 @@ jobs:
           def main():
               print('Starting RS + 21DMA Scanner...')
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-
-              # ดึง SPY return ก่อน
               print('Fetching SPY benchmark...')
               spy_ret = fetch_spy()
               print('SPY 12M return: ' + str(round(spy_ret*100, 1)) + '%')
 
-              # ดึงข้อมูลทุกหุ้นก่อน
-              all_tickers = []
-              for theme, tickers in THEMES.items():
-                  all_tickers.extend(tickers)
-              all_tickers = list(dict.fromkeys(all_tickers))
-
+              all_tickers = list(dict.fromkeys([t for tickers in THEMES.values() for t in tickers]))
               print('Fetching ' + str(len(all_tickers)) + ' stocks...')
+
               stock_data = {}
               for ticker in all_tickers:
                   d = fetch_stock(ticker)
                   if d:
                       stock_data[ticker] = d
-                  time.sleep(0.2)
+                  time.sleep(0.3)  # ✅ เพิ่ม delay จาก 0.2 → 0.3 ป้องกัน rate limit
 
-              # คำนวณ RS Rating โดยใช้ universe ทั้งหมด
               all_12m_rets = [d['ret_12m'] for d in stock_data.values()]
 
-              # สแกนแต่ละ theme
               theme_results = {}
               for theme, tickers in THEMES.items():
                   theme_stocks = []
                   for ticker in tickers:
-                      if ticker not in stock_data:
-                          continue
+                      if ticker not in stock_data: continue
                       d = stock_data[ticker]
                       rs = calc_rs_rating(d['ret_12m'], spy_ret, all_12m_rets)
                       score, signals = score_setup(d, rs, spy_ret)
-                      if score is None or score < 30:
-                          continue
-
-                      # ATR-based SL/TP
+                      if score is None or score < 30: continue
                       p   = d['price']
                       atr = d['atr']
                       sl  = round(p - 1.5*atr, 2)
                       tp1 = round(p + 1.5*atr, 2)
                       tp2 = round(p + 3.0*atr, 2)
                       tp3 = round(p + 6.0*atr, 2)
-                      sl_pct  = round((sl-p)/p*100, 1)
-                      tp1_pct = round((tp1-p)/p*100, 1)
-                      tp2_pct = round((tp2-p)/p*100, 1)
-                      tp3_pct = round((tp3-p)/p*100, 1)
-
                       theme_stocks.append({
                           'ticker':    ticker,
                           'name':      d['name'],
@@ -255,49 +228,41 @@ jobs:
                           'atr_pct':   d['atr_pct'],
                           'vol_surge': d['vol_surge'],
                           'signals':   ' / '.join(signals),
-                          'sl':  sl,  'sl_pct':  sl_pct,
-                          'tp1': tp1, 'tp1_pct': tp1_pct,
-                          'tp2': tp2, 'tp2_pct': tp2_pct,
-                          'tp3': tp3, 'tp3_pct': tp3_pct,
+                          'sl':  sl,   'sl_pct':  round((sl-p)/p*100, 1),
+                          'tp1': tp1,  'tp1_pct': round((tp1-p)/p*100, 1),
+                          'tp2': tp2,  'tp2_pct': round((tp2-p)/p*100, 1),
+                          'tp3': tp3,  'tp3_pct': round((tp3-p)/p*100, 1),
                       })
-
                   if theme_stocks:
                       theme_stocks.sort(key=lambda x: -x['score'])
                       theme_results[theme] = theme_stocks
 
-              # คำนวณ Theme RS (average RS ของ top 3 ใน theme)
               theme_rs = {}
               for theme, stocks in theme_results.items():
                   top3 = stocks[:3]
-                  avg_rs = sum(s['rs'] for s in top3) / len(top3)
-                  theme_rs[theme] = round(avg_rs)
+                  theme_rs[theme] = round(sum(s['rs'] for s in top3) / len(top3))
 
-              # sort themes by RS
               sorted_themes = sorted(theme_rs.items(), key=lambda x: -x[1])
 
-              # ส่ง Header
               send(
-                  'RS + 21DMA Structure Scanner - ' + today + '\n'
+                  '<b>RS + 21DMA Structure Scanner - ' + today + '</b>\n'
                   'RS Rating = percentile rank vs universe\n'
                   '21DMA = pullback-to-MA buy zone\n'
                   'SL=1.5xATR / TP=1.5/3/6xATR\n'
                   'SPY 12M: ' + ('+' if spy_ret >= 0 else '') + str(round(spy_ret*100, 1)) + '%'
               )
 
-              # ส่ง Leading Themes
-              theme_msg = 'LEADING THEMES (by RS)\n'
+              theme_msg = '<b>LEADING THEMES (by RS)</b>\n'
               for i, (theme, rs) in enumerate(sorted_themes[:8]):
                   emoji = 'HOT' if rs >= 85 else ('WARM' if rs >= 70 else 'OK')
                   theme_msg += str(i+1) + '. ' + theme + ' — RS ' + str(rs) + ' ' + emoji + '\n'
               send(theme_msg)
 
-              # ส่งหุ้นใน top 3 themes
               top_themes = [t for t, _ in sorted_themes[:3]]
               for theme in top_themes:
-                  if theme not in theme_results:
-                      continue
+                  if theme not in theme_results: continue
                   stocks = theme_results[theme][:TOP_N]
-                  msg = 'TOP SETUPS: ' + theme + ' (Theme RS: ' + str(theme_rs[theme]) + ')\n'
+                  msg = '<b>TOP SETUPS: ' + theme + '</b> (Theme RS: ' + str(theme_rs[theme]) + ')\n'
                   for i, s in enumerate(stocks):
                       ma21_str = str(round(s['pct_from_ma21']*100, 1))
                       sign = '+' if float(ma21_str) >= 0 else ''
