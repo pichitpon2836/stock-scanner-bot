@@ -2,13 +2,8 @@ name: Squeeze Scanner
 
 on:
   schedule:
-    # ── รัน 2 รอบต่อวัน (วันจันทร์–ศุกร์) ──
-    # 02:00 UTC = 09:00 Bangkok (ตลาดเปิด pre-market)
-    # 09:30 UTC = 16:30 Bangkok (หลังตลาด US ปิด)
     - cron: '0 2 * * 1-5'
     - cron: '30 9 * * 1-5'
-
-  # กด Run ด้วยตัวเองได้จาก GitHub Actions tab
   workflow_dispatch:
 
 jobs:
@@ -27,9 +22,7 @@ jobs:
           cache: 'pip'
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pandas_ta --no-deps
+        run: pip install -r requirements.txt
 
       - name: Run Squeeze Scanner
         env:
