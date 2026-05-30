@@ -1,0 +1,40 @@
+# .github/workflows/monthly pdf report.yml
+# ส่ง PDF Report ทุกวันสุดท้ายของเดือน เวลา 16:30 ET (หลังตลาดปิด)
+
+name: 📄 Monthly PDF Report
+
+on:
+  schedule:
+    # วันที่ 28-31 เวลา 20:30 UTC (16:30 ET) — GitHub จะรันเฉพาะวันสุดท้าย
+    - cron: '30 20 28-31 * *'
+  workflow_dispatch:  # รันมือได้ทดสอบ
+
+jobs:
+  pdf-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate & Send PDF Report
+        env:
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python pdf_report.py
+
+      - name: Upload PDF as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: monthly-report
+          path: "*.pdf"
+          retention-days: 90
