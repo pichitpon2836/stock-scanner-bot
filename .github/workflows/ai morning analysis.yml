@@ -1,0 +1,36 @@
+# .github/workflows/ai morning analysis.yml
+# ส่ง AI Analysis พร้อม Morning Report ทุกวันจันทร์-ศุกร์ 09:35 ET
+
+name: 🤖 AI Morning Analysis
+
+on:
+  schedule:
+    # 09:35 ET = 13:35 UTC
+    - cron: '35 13 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  ai-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send AI Analysis
+        env:
+          TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BOT_MODE:          oneshot
+          REPORT_MODE:       ai_analysis
+        run: python ai_analyst_bot.py
