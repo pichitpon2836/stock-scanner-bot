@@ -1,0 +1,34 @@
+# .github/workflows/portfolio morning.yml
+# ส่ง Morning Report เข้า Telegram ทุกวันจันทร์-ศุกร์ เวลา 09:30 ET (ตลาดเปิด)
+
+name: 📊 Portfolio Morning Report
+
+on:
+  schedule:
+    # 09:30 ET = 13:30 UTC (ช่วง EST) | 12:30 UTC (ช่วง EDT)
+    - cron: '30 13 * * 1-5'
+  workflow_dispatch:  # รันมือได้จาก GitHub UI
+
+jobs:
+  morning-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Morning Report
+        env:
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          REPORT_MODE:      morning
+        run: python portfolio_tracker.py
