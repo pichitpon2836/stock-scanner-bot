@@ -28,9 +28,9 @@ jobs:
 
       - name: Send AI Analysis
         env:
-          TELEGRAM_TOKEN:    ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID:  ${{ secrets.TELEGRAM_CHAT_ID }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          BOT_MODE:          oneshot
-          REPORT_MODE:       ai_analysis
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
+          BOT_MODE:         oneshot
+          REPORT_MODE:      ai_analysis
         run: python ai_analyst_bot.py
