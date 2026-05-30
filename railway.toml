@@ -1,0 +1,15 @@
+# railway.toml — Deploy AI Analyst Bot บน Railway (ฟรี $5/เดือน)
+# ใช้สำหรับ polling mode — bot รับคำถามจาก Telegram ได้ตลอด 24 ชั่วโมง
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "BOT_MODE=polling python ai_analyst_bot.py"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+# Environment Variables ที่ต้องตั้งใน Railway Dashboard:
+# TELEGRAM_TOKEN    = token จาก @BotFather
+# TELEGRAM_CHAT_ID  = chat ID ของคุณ
+# ANTHROPIC_API_KEY = key จาก console.anthropic.com
