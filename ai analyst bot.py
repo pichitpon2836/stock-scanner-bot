@@ -21,7 +21,7 @@ import requests
 import yfinance as yf
 from datetime import datetime
 import pytz
-import anthropic
+import google.generativeai as genai
 
 # ════════════════════════════════════════
 # CONFIG
@@ -29,7 +29,7 @@ import anthropic
 
 TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID", "")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")
 
 COMPANY_NAME = "DREAMS Trading Co."
 CAPITAL      = 10000
@@ -158,20 +158,19 @@ SYSTEM_PROMPT = """คุณเป็น AI Analyst ของ DREAMS Trading Com
 - ตอบยาวเกินไป — max 300 คำ"""
 
 def ask_claude(question: str, positions: list) -> str:
-    if not ANTHROPIC_API_KEY:
-        return "❌ ไม่มี ANTHROPIC_API_KEY — ตั้งใน GitHub Secrets ด้วยครับ"
+    if not GEMINI_API_KEY:
+        return "❌ ไม่มี GEMINI_API_KEY — ตั้งใน GitHub Secrets ด้วยครับ"
     try:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        ctx    = portfolio_context(positions)
-        msg    = client.messages.create(
-            model      = "claude-sonnet-4-20250514",
-            max_tokens = 600,
-            system     = SYSTEM_PROMPT,
-            messages   = [{"role": "user", "content": f"{ctx}\n\nคำถาม: {question}"}]
+        genai.configure(api_key=GEMINI_API_KEY)
+        model  = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=SYSTEM_PROMPT
         )
-        return msg.content[0].text
+        ctx    = portfolio_context(positions)
+        resp   = model.generate_content(f"{ctx}\n\nคำถาม: {question}")
+        return resp.text
     except Exception as e:
-        return f"❌ Claude error: {e}"
+        return f"❌ Gemini error: {e}"
 
 def build_ai_analysis(positions: list) -> str:
     """สร้าง AI Analysis สำหรับส่งพร้อม Morning Report"""
