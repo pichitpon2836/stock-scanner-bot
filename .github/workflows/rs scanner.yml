@@ -1,4 +1,4 @@
-name: RS Rating & 21DMA Structure Scanner
+name: RS Rating & SCTR-Proxy Scanner
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # เพิ่มจาก 30 → 45 เพราะ scan 85 tickers
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -33,25 +33,39 @@ jobs:
           CHAT_ID   = os.environ['TELEGRAM_CHAT_ID']
           TIMEZONE  = 'Asia/Bangkok'
           TOP_N     = 5
+          RS_PASS   = 85   # checklist item 1 threshold
 
+          # ============================================================
+          # UNIVERSE — เดิม 12 themes (semi/AI/quantum) + Trump Pump themes
+          # (Manufacturing/Tariff, LNG, Critical Minerals, Crypto)
+          # nanocap/RSPLIT/China-compliance-risk tickers ตัดออกตาม "กฎเหล็ก"
+          # ============================================================
           THEMES = {
-              'Power Semiconductors':    ['ALGM','MPWR','ONSEMI','ON','STM','WOLF','AEHR'],
-              'Memory':                  ['MU','WDC','SKX','LSCC','MRVL','RMBS','NAND'],
-              'Semiconductor Equipment': ['ONTO','FORM','AMKR','ACMR','KLIC','ICHR','UCTT','RTEX'],
+              # --- เดิมจาก rs scanner ---
+              'Power Semiconductors':    ['ALGM','MPWR','ON','STM','WOLF','AEHR'],
+              'Memory':                  ['MU','WDC','LSCC','MRVL','RMBS'],
+              'Semiconductor Equipment': ['ONTO','FORM','AMKR','ACMR','KLIC','ICHR','UCTT'],
               'Analog Semiconductors':   ['ARM','TXN','ADI','MCHP','NXPI','ALAB','SWKS'],
               'AI Infrastructure':       ['NVDA','AVGO','SMCI','VRT','CRWV','APLD','COHR'],
-              'Grid Infrastructure':     ['GEV','ETN','NVT','EATON','PWR','ROPER','CARR'],
+              'Grid Infrastructure':     ['GEV','ETN','NVT','PWR','ROPER','CARR'],
               'GPU Cloud & HPC':         ['CRWV','CORZ','APLD','CLSK','HIVE','BTBT'],
-              'Connectivity Semi':       ['ALAB','MXCL','KEYS','VIAV','LITE'],
+              'Connectivity Semi':       ['ALAB','KEYS','VIAV','LITE'],
               'Earth Observation':       ['PL','BKSY','SPIR','ASTS'],
               'Clean Energy':            ['FCEL','BE','PLUG','NNE','SMR','OKLO','CEG'],
               'Quantum Computing':       ['IONQ','QBTS','QUBT','RGTI','ARQQ'],
               'AI Services':             ['PATH','BBAI','SOUN','GTLB','DDOG','NET','CRWD'],
+
+              # --- เพิ่มจาก Trump Pump (ตัด nano/China/RSPLIT ออกตามกฎเหล็ก) ---
+              'Manufacturing/Tariff':    ['STRL','MLM','VMC','NUE','X','CLF','RS','CMC','AA','ATI'],
+              'Energy/LNG':              ['LNG','CQP','AR','EQT','CNX','CTRA','MUR','CHRD'],
+              'AI/Tech Hardware':        ['MU','DELL','STX','WDC','AMD','INTC','NVDA','SMCI'],
+              'Defense/Space':           ['RKLB','ASTS','IONQ','LUNR','AEVA','PL','OUST'],
+              'Critical Minerals':       ['MP','LAC','USAR'],
+              'Crypto/Blockchain':       ['MSTR','COIN','RIOT','MARA','CLSK','HUT','IREN','WULF'],
           }
 
           BENCHMARK = 'SPY'
 
-          # ✅ PATCHED: send() มี fallback
           def send(text):
               if len(text) > 4000: text = text[:3990] + '...'
               try:
@@ -85,20 +99,18 @@ jobs:
                   trs.append(tr)
               return sum(trs)/len(trs) if trs else 0
 
-          def calc_rs_rating(stock_ret_12m, spy_ret_12m, all_rets):
-              if not all_rets: return 50
-              rank = sum(1 for r in all_rets if r < stock_ret_12m)
-              return round(rank / len(all_rets) * 100)
-
           def fetch_spy():
               try:
                   session = cffi_requests.Session(impersonate='chrome')
                   hist = yf.Ticker(BENCHMARK, session=session).history(period='1y')
-                  if hist.empty: return 0
+                  if hist.empty: return {'12m': 0, '6m': 0, '3m': 0}
                   closes = hist['Close']
-                  return float((closes.iloc[-1] - closes.iloc[0]) / closes.iloc[0])
+                  ret_12m = float((closes.iloc[-1] - closes.iloc[0]) / closes.iloc[0])
+                  ret_6m  = float((closes.iloc[-1] - closes.iloc[-126]) / closes.iloc[-126]) if len(closes) >= 126 else ret_12m
+                  ret_3m  = float((closes.iloc[-1] - closes.iloc[-66])  / closes.iloc[-66])  if len(closes) >= 66  else ret_12m
+                  return {'12m': ret_12m, '6m': ret_6m, '3m': ret_3m}
               except:
-                  return 0
+                  return {'12m': 0, '6m': 0, '3m': 0}
 
           def fetch_stock(ticker):
               try:
@@ -108,7 +120,7 @@ jobs:
                   price = info.get('currentPrice') or info.get('regularMarketPrice')
                   if not price: return None
                   hist = t.history(period='1y')
-                  if hist.empty or len(hist) < 21: return None
+                  if hist.empty or len(hist) < 66: return None
                   closes  = hist['Close']
                   volumes = hist['Volume']
                   atr     = calc_atr(hist)
@@ -117,14 +129,31 @@ jobs:
                   ma200   = closes[-200:].mean() if len(closes) >= 200 else closes.mean()
                   high52  = closes.max()
                   low52   = closes.min()
-                  ret_12m = float((closes.iloc[-1] - closes.iloc[0]) / closes.iloc[0])
-                  ret_3m  = float((closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66]) if len(closes) >= 66 else 0
+
+                  ret_12m = float((closes.iloc[-1] - closes.iloc[0])   / closes.iloc[0])
+                  ret_6m  = float((closes.iloc[-1] - closes.iloc[-126])/ closes.iloc[-126]) if len(closes) >= 126 else ret_12m
+                  ret_3m  = float((closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66])
                   ret_1m  = float((closes.iloc[-1] - closes.iloc[-22]) / closes.iloc[-22]) if len(closes) >= 22 else 0
+
                   avg_vol = volumes[-20:].mean() if len(volumes) >= 20 else volumes.mean()
                   avg_vol5= volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
                   vol_surge = float(avg_vol5/avg_vol) if avg_vol > 0 else 0
+
                   pct_from_ma21 = float((price - float(ma21)) / float(ma21))
                   pct_from_high = float((float(high52) - price) / float(high52))
+                  pct_from_low  = float((price - float(low52)) / float(low52)) if low52 > 0 else 0
+
+                  # --- UnR pattern (checklist item 6): undercut MA50/MA21 in last 10 bars then rally back above ---
+                  unr = False
+                  lookback = closes[-10:]
+                  if len(lookback) >= 3:
+                      min_in_window = lookback.min()
+                      undercut_ma21 = min_in_window < float(ma21) * 0.99
+                      now_above_ma21 = price > float(ma21)
+                      undercut_ma50 = min_in_window < float(ma50) * 0.99
+                      now_above_ma50 = price > float(ma50)
+                      unr = (undercut_ma21 and now_above_ma21) or (undercut_ma50 and now_above_ma50)
+
                   return {
                       'ticker':         ticker,
                       'name':           info.get('shortName', ticker)[:25],
@@ -135,43 +164,72 @@ jobs:
                       'ma50':           float(ma50),
                       'ma200':          float(ma200),
                       'high52':         float(high52),
+                      'low52':          float(low52),
                       'ret_12m':        ret_12m,
+                      'ret_6m':         ret_6m,
                       'ret_3m':         ret_3m,
                       'ret_1m':         ret_1m,
                       'vol_surge':      vol_surge,
                       'pct_from_ma21':  pct_from_ma21,
                       'pct_from_high':  pct_from_high,
+                      'pct_from_low':   pct_from_low,
+                      'unr':            unr,
                   }
               except Exception as e:
                   print(ticker + ' error: ' + str(e))
                   return None
 
-          def score_setup(d, rs_rating, spy_ret):
+          # ============================================================
+          # SCTR-PROXY RS RATING
+          # Multi-timeframe (12M/6M/3M) percentile rank vs universe,
+          # weighted similar to StockCharts SCTR (long/medium/short term)
+          # ============================================================
+          def calc_composite_return(d):
+              return 0.3 * d['ret_12m'] + 0.3 * d['ret_6m'] + 0.4 * d['ret_3m']
+
+          def calc_rs_rating(stock_composite, all_composites):
+              if not all_composites: return 50
+              rank = sum(1 for r in all_composites if r < stock_composite)
+              return round(rank / len(all_composites) * 100)
+
+          def score_setup(d, rs_rating, spy):
               score = 0
               signals = []
-              if rs_rating >= 90:
-                  score += 40; signals.append('RS ' + str(rs_rating))
-              elif rs_rating >= 80:
-                  score += 25; signals.append('RS ' + str(rs_rating))
+
+              # Item 1: RS Rank > 85
+              if rs_rating >= RS_PASS:
+                  score += 35; signals.append('RS ' + str(rs_rating) + ' PASS')
               elif rs_rating >= 70:
                   score += 15; signals.append('RS ' + str(rs_rating))
               else:
                   return None, []
+
+              # Item 3: base/consolidation (proxy: near 21DMA, not parabolic)
               pfm = d['pct_from_ma21']
               if -0.03 <= pfm <= 0.05:
-                  score += 30; signals.append('At 21DMA')
+                  score += 25; signals.append('At 21DMA')
               elif -0.08 <= pfm <= 0.10:
-                  score += 20; signals.append(str(round(pfm*100, 1)) + '% from 21DMA')
+                  score += 15; signals.append(str(round(pfm*100, 1)) + '% from 21DMA')
               elif pfm > 0.10:
-                  score += 5; signals.append(str(round(pfm*100, 1)) + '% above 21DMA')
+                  score += 5; signals.append(str(round(pfm*100, 1)) + '% above 21DMA (extended)')
+
               if d['price'] > d['ma50'] > d['ma200']:
-                  score += 15; signals.append('MA stack')
+                  score += 10; signals.append('MA stack')
+
+              # Item 4: not too extended from ATH
               if d['pct_from_high'] <= 0.05:
-                  score += 15; signals.append('At 52W High')
+                  score += 10; signals.append('At 52W High')
               elif d['pct_from_high'] <= 0.15:
-                  score += 8; signals.append(str(round(d['pct_from_high']*100)) + '% from High')
-              if d['ret_12m'] > spy_ret * 1.5:
-                  score += 10; signals.append('12M >' + str(round(d['ret_12m']*100)) + '%')
+                  score += 5; signals.append(str(round(d['pct_from_high']*100)) + '% from High')
+
+              # 12M outperform SPY
+              if d['ret_12m'] > spy['12m'] * 1.5:
+                  score += 5; signals.append('12M >SPY x1.5')
+
+              # Item 6 bonus: UnR pattern
+              if d['unr']:
+                  score += 10; signals.append('🎁 UnR pattern')
+
               return score, signals
 
           def fmt_cap(mktcap):
@@ -180,23 +238,26 @@ jobs:
               return 'N/A'
 
           def main():
-              print('Starting RS + 21DMA Scanner...')
+              print('Starting RS + SCTR-Proxy Scanner...')
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-              print('Fetching SPY benchmark...')
-              spy_ret = fetch_spy()
-              print('SPY 12M return: ' + str(round(spy_ret*100, 1)) + '%')
+
+              spy = fetch_spy()
+              print('SPY 12M/6M/3M: ' + str(round(spy['12m']*100,1)) + '% / ' +
+                    str(round(spy['6m']*100,1)) + '% / ' + str(round(spy['3m']*100,1)) + '%')
 
               all_tickers = list(dict.fromkeys([t for tickers in THEMES.values() for t in tickers]))
               print('Fetching ' + str(len(all_tickers)) + ' stocks...')
 
               stock_data = {}
-              for ticker in all_tickers:
+              for i, ticker in enumerate(all_tickers):
                   d = fetch_stock(ticker)
                   if d:
                       stock_data[ticker] = d
-                  time.sleep(0.3)  # ✅ เพิ่ม delay จาก 0.2 → 0.3 ป้องกัน rate limit
+                  print('  [' + str(i+1) + '/' + str(len(all_tickers)) + '] ' + ticker)
+                  time.sleep(0.3)
 
-              all_12m_rets = [d['ret_12m'] for d in stock_data.values()]
+              # Composite returns for RS percentile ranking (universe-relative SCTR proxy)
+              all_composites = [calc_composite_return(d) for d in stock_data.values()]
 
               theme_results = {}
               for theme, tickers in THEMES.items():
@@ -204,9 +265,10 @@ jobs:
                   for ticker in tickers:
                       if ticker not in stock_data: continue
                       d = stock_data[ticker]
-                      rs = calc_rs_rating(d['ret_12m'], spy_ret, all_12m_rets)
-                      score, signals = score_setup(d, rs, spy_ret)
-                      if score is None or score < 30: continue
+                      composite = calc_composite_return(d)
+                      rs = calc_rs_rating(composite, all_composites)
+                      score, signals = score_setup(d, rs, spy)
+                      if score is None: continue
                       p   = d['price']
                       atr = d['atr']
                       sl  = round(p - 1.5*atr, 2)
@@ -219,14 +281,12 @@ jobs:
                           'rs':        rs,
                           'score':     score,
                           'price':     p,
-                          'ma21':      d['ma21'],
-                          'high52':    d['high52'],
                           'ret_12m':   d['ret_12m'],
                           'ret_3m':    d['ret_3m'],
                           'pct_from_ma21': d['pct_from_ma21'],
                           'pct_from_high': d['pct_from_high'],
                           'atr_pct':   d['atr_pct'],
-                          'vol_surge': d['vol_surge'],
+                          'unr':       d['unr'],
                           'signals':   ' / '.join(signals),
                           'sl':  sl,   'sl_pct':  round((sl-p)/p*100, 1),
                           'tp1': tp1,  'tp1_pct': round((tp1-p)/p*100, 1),
@@ -237,6 +297,7 @@ jobs:
                       theme_stocks.sort(key=lambda x: -x['score'])
                       theme_results[theme] = theme_stocks
 
+              # Theme RS = avg RS of top 3 in theme (leading theme indicator, item 2)
               theme_rs = {}
               for theme, stocks in theme_results.items():
                   top3 = stocks[:3]
@@ -245,20 +306,24 @@ jobs:
               sorted_themes = sorted(theme_rs.items(), key=lambda x: -x[1])
 
               send(
-                  '<b>RS + 21DMA Structure Scanner - ' + today + '</b>\n'
-                  'RS Rating = percentile rank vs universe\n'
-                  '21DMA = pullback-to-MA buy zone\n'
+                  '<b>RS + SCTR-Proxy Scanner - ' + today + '</b>\n'
+                  'RS Rank = percentile vs ' + str(len(stock_data)) + ' tickers (12M/6M/3M weighted, ~SCTR proxy)\n'
+                  'Checklist item 1 PASS = RS &gt;= ' + str(RS_PASS) + '\n'
+                  '21DMA = pullback zone | UnR = bonus item 6\n'
                   'SL=1.5xATR / TP=1.5/3/6xATR\n'
-                  'SPY 12M: ' + ('+' if spy_ret >= 0 else '') + str(round(spy_ret*100, 1)) + '%'
+                  'SPY 12M: ' + ('+' if spy["12m"] >= 0 else '') + str(round(spy['12m']*100, 1)) + '%'
               )
 
-              theme_msg = '<b>LEADING THEMES (by RS)</b>\n'
+              # Leading themes (item 2)
+              theme_msg = '<b>LEADING THEMES (Top 5 = checklist item 2)</b>\n'
               for i, (theme, rs) in enumerate(sorted_themes[:8]):
+                  flag = '✅ TOP5' if i < 5 else ''
                   emoji = 'HOT' if rs >= 85 else ('WARM' if rs >= 70 else 'OK')
-                  theme_msg += str(i+1) + '. ' + theme + ' — RS ' + str(rs) + ' ' + emoji + '\n'
+                  theme_msg += str(i+1) + '. ' + theme + ' — RS ' + str(rs) + ' ' + emoji + ' ' + flag + '\n'
               send(theme_msg)
 
-              top_themes = [t for t, _ in sorted_themes[:3]]
+              # Setups in top themes — only RS PASS (>=85) shown first, then near-pass
+              top_themes = [t for t, _ in sorted_themes[:5]]
               for theme in top_themes:
                   if theme not in theme_results: continue
                   stocks = theme_results[theme][:TOP_N]
@@ -266,8 +331,10 @@ jobs:
                   for i, s in enumerate(stocks):
                       ma21_str = str(round(s['pct_from_ma21']*100, 1))
                       sign = '+' if float(ma21_str) >= 0 else ''
+                      pass_tag = '✅' if s['rs'] >= RS_PASS else '👀'
+                      unr_tag = ' 🎁UnR' if s['unr'] else ''
                       msg += (
-                          '\n#' + str(i+1) + ' ' + s['ticker'] + ' RS:' + str(s['rs']) + ' Score:' + str(s['score']) + '\n'
+                          '\n' + pass_tag + ' #' + str(i+1) + ' ' + s['ticker'] + ' RS:' + str(s['rs']) + ' Score:' + str(s['score']) + unr_tag + '\n'
                           '$' + str(round(s['price'],2)) + ' | 21DMA: ' + sign + ma21_str + '% | ATR:' + str(round(s['atr_pct'],1)) + '%\n'
                           '12M:+' + str(round(s['ret_12m']*100)) + '% | 3M:+' + str(round(s['ret_3m']*100)) + '%\n'
                           'Buy: $' + str(round(s['price'],2)) + '\n'
