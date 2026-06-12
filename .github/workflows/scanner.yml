@@ -163,6 +163,7 @@ jobs:
                   'price': d['price'], 'atr': d['atr'], 'fair': fair, 'buy': buy,
                   'disc': (d['price']-fair)/fair*100, 'metrics': metrics,
                   'desc': d['desc'], 'gap': gap,
+                  'target_price': d.get('target_price'),  # ✅ analyst consensus target สำหรับ cross-check
               }
 
           def buffett(d):
@@ -181,11 +182,12 @@ jobs:
               eps = d['eps_ttm'] or d['eps_fwd']
               growth = d['growth']
               if not eps or eps <= 0 or not growth or growth <= 0: return None
-              gp = growth * 100; fair = eps * gp; buy = fair * 0.95
+              gp = min(growth * 100, 30)  # ✅ FIXED: cap fair PE ที่ 30 — growth สูงเกินนี้ (เช่น +326%) ไม่ sustainable, ทำให้ fair value เว่อร์เกินจริง
+              fair = eps * gp; buy = fair * 0.95
               gap = (d['price']-buy)/buy
               if gap > 0.10: return None
               peg = ('PEG ' + str(round(d['peg'],2))) if d['peg'] else ('PEG ~' + str(round(d['price']/fair,2)))
-              m = [peg, 'EPS +' + str(round(gp)) + '%']
+              m = [peg, 'EPS +' + str(round(growth*100)) + '%']
               if d['rev_growth']: m.append('Rev +' + str(round(d['rev_growth']*100)) + '%')
               return make_row(d, fair, buy, gap, ' / '.join(m))
 
@@ -246,10 +248,17 @@ jobs:
           def fmt(rank, s, prefix=''):
               emoji = 'BUY ZONE' if 'BUY' in s['status'] else 'WATCH'
               lv = fmt_levels(s['price'], s['atr'])
+              fair_line = '  Fair: $' + str(round(s['fair'],2)) + ' (' + str(round(s['disc'])) + '%)'
+              tp = s.get('target_price')
+              if tp:
+                  tp_diff = (s['fair'] - tp) / tp * 100 if tp else 0
+                  fair_line += ' | Analyst: $' + str(round(tp,2))
+                  if abs(tp_diff) >= 50:
+                      fair_line += ' ⚠️ ต่างกันมาก เช็ค consensus เพิ่ม'
               lines = ['',
                   '#' + str(rank) + ' ' + prefix + s['ticker'] + ' - ' + s['name'],
                   '  Quality: ' + str(s['score']) + '/100 | ' + emoji,
-                  '  Fair: $' + str(round(s['fair'],2)) + ' (' + str(round(s['disc'])) + '%)',
+                  fair_line,
                   '  ' + lv.replace('\n', '\n  '),
                   '  ' + s['metrics']]
               if s['desc']: lines.append('  ' + s['desc'])
