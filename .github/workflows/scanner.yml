@@ -167,6 +167,7 @@ jobs:
               }
 
           def buffett(d):
+              if d['price'] <= d['ma50']: return None  # ✅ ตัด falling knives — ราคาต้องอยู่เหนือ MA50 (ตลาดเริ่มเห็นด้วยกับ thesis)
               eps = d['eps_fwd']
               if not eps or eps <= 0: return None
               fair = eps * 22; buy = fair * 0.85
@@ -179,6 +180,7 @@ jobs:
               return make_row(d, fair, buy, gap, ' / '.join(m))
 
           def lynch(d):
+              if d['price'] <= d['ma50']: return None  # ✅ ตัด falling knives — ราคาต้องอยู่เหนือ MA50
               eps = d['eps_ttm'] or d['eps_fwd']
               growth = d['growth']
               if not eps or eps <= 0 or not growth or growth <= 0: return None
@@ -192,6 +194,7 @@ jobs:
               return make_row(d, fair, buy, gap, ' / '.join(m))
 
           def sleep_scan(d):
+              if d['price'] <= d['ma50']: return None  # ✅ ตัด falling knives — ราคาต้องอยู่เหนือ MA50
               if not d['fcf'] or not d['shares'] or d['shares'] <= 0: return None
               fcf_ps = d['fcf']/d['shares']
               if fcf_ps <= 0: return None
@@ -227,6 +230,7 @@ jobs:
               }
 
           def rerate(d):
+              if d['price'] <= d['ma50']: return None  # ✅ ตัด falling knives — ราคาต้องอยู่เหนือ MA50 (เคส CELH/TOST: re-rating score สูงแต่ downtrend ต่อเนื่อง SCTR<10)
               score = 0; signals = []
               p = d['price']; pe = d['pe']; pb = d['pb']
               roic = d['roic']; insider = d['insider_pct']
