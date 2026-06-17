@@ -1,0 +1,364 @@
+name: RS Rating & SCTR-Proxy Scanner
+
+on:
+  schedule:
+    - cron: '0 2 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write rs_bot.py
+        run: |
+          cat > rs_bot.py << 'PYEOF'
+          import os, time, requests, yfinance as yf, pytz
+          from curl_cffi import requests as cffi_requests
+          from datetime import datetime
+
+          BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
+          CHAT_ID   = os.environ['TELEGRAM_CHAT_ID']
+          TIMEZONE  = 'Asia/Bangkok'
+          TOP_N     = 5
+          RS_PASS   = 85   # checklist item 1 threshold
+
+          THEMES = {
+              'Power Semiconductors':    ['ALGM','MPWR','ON','STM','WOLF','AEHR'],
+              'Memory':                  ['MU','WDC','LSCC','MRVL','RMBS'],
+              'Semiconductor Equipment': ['ONTO','FORM','AMKR','ACMR','KLIC','ICHR','UCTT'],
+              'Analog Semiconductors':   ['ARM','TXN','ADI','MCHP','NXPI','ALAB','SWKS'],
+              'AI Infrastructure':       ['NVDA','AVGO','SMCI','VRT','CRWV','APLD','COHR'],
+              'Grid Infrastructure':     ['GEV','ETN','NVT','PWR','ROPER','CARR'],
+              'GPU Cloud & HPC':         ['CRWV','CORZ','APLD','CLSK','HIVE','BTBT'],
+              'Connectivity Semi':       ['ALAB','KEYS','VIAV','LITE'],
+              'Earth Observation':       ['PL','BKSY','SPIR','ASTS'],
+              'Clean Energy':            ['FCEL','BE','PLUG','NNE','SMR','OKLO','CEG'],
+              'Quantum Computing':       ['IONQ','QBTS','QUBT','RGTI','ARQQ'],
+              'AI Services':             ['PATH','BBAI','SOUN','GTLB','DDOG','NET','CRWD'],
+              'Manufacturing/Tariff':    ['STRL','MLM','VMC','NUE','X','CLF','RS','CMC','AA','ATI'],
+              'Energy/LNG':              ['LNG','CQP','AR','EQT','CNX','CTRA','MUR','CHRD'],
+              'AI/Tech Hardware':        ['MU','DELL','STX','WDC','AMD','INTC','NVDA','SMCI'],
+              'Defense/Space':           ['RKLB','ASTS','IONQ','LUNR','AEVA','PL','OUST'],
+              'Critical Minerals':       ['MP','LAC','USAR'],
+              'Crypto/Blockchain':       ['MSTR','COIN','RIOT','MARA','CLSK','HUT','IREN','WULF'],
+          }
+
+          BENCHMARK = 'SPY'
+
+          def send(text):
+              if len(text) > 4000: text = text[:3990] + '...'
+              try:
+                  r = requests.post(
+                      'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                      json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
+                      timeout=15,
+                  )
+                  if r.status_code != 200:
+                      plain = (text
+                          .replace('<b>','').replace('</b>','')
+                          .replace('<i>','').replace('</i>','')
+                      )
+                      requests.post(
+                          'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                          json={'chat_id': CHAT_ID, 'text': plain},
+                          timeout=15,
+                      )
+              except Exception as e:
+                  print('Telegram error: ' + str(e))
+              time.sleep(0.5)
+
+          def calc_atr(hist, period=14):
+              if hist.empty or len(hist) < 2: return 0
+              highs  = hist['High'].values
+              lows   = hist['Low'].values
+              closes = hist['Close'].values
+              trs = []
+              for i in range(1, min(period+1, len(closes))):
+                  tr = max(highs[-i]-lows[-i], abs(highs[-i]-closes[-i-1]), abs(lows[-i]-closes[-i-1]))
+                  trs.append(tr)
+              return sum(trs)/len(trs) if trs else 0
+
+          def fetch_spy():
+              try:
+                  session = cffi_requests.Session(impersonate='chrome')
+                  hist = yf.Ticker(BENCHMARK, session=session).history(period='1y')
+                  if hist.empty: return {'12m': 0, '6m': 0, '3m': 0}
+                  closes = hist['Close']
+                  ret_12m = float((closes.iloc[-1] - closes.iloc[0]) / closes.iloc[0])
+                  ret_6m  = float((closes.iloc[-1] - closes.iloc[-126]) / closes.iloc[-126]) if len(closes) >= 126 else ret_12m
+                  ret_3m  = float((closes.iloc[-1] - closes.iloc[-66])  / closes.iloc[-66])  if len(closes) >= 66  else ret_12m
+                  return {'12m': ret_12m, '6m': ret_6m, '3m': ret_3m}
+              except:
+                  return {'12m': 0, '6m': 0, '3m': 0}
+
+          def fetch_stock(ticker):
+              try:
+                  session = cffi_requests.Session(impersonate='chrome')
+                  t = yf.Ticker(ticker, session=session)
+                  info = t.info
+                  price = info.get('currentPrice') or info.get('regularMarketPrice')
+                  if not price: return None
+                  hist = t.history(period='1y')
+                  if hist.empty or len(hist) < 66: return None
+                  closes  = hist['Close']
+                  volumes = hist['Volume']
+                  atr     = calc_atr(hist)
+                  ma21    = closes[-21:].mean()
+                  ma50    = closes[-50:].mean() if len(closes) >= 50 else closes.mean()
+                  ma200   = closes[-200:].mean() if len(closes) >= 200 else closes.mean()
+                  high52  = closes.max()
+                  low52   = closes.min()
+
+                  ret_12m = float((closes.iloc[-1] - closes.iloc[0])   / closes.iloc[0])
+                  ret_6m  = float((closes.iloc[-1] - closes.iloc[-126])/ closes.iloc[-126]) if len(closes) >= 126 else ret_12m
+                  ret_3m  = float((closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66])
+                  ret_1m  = float((closes.iloc[-1] - closes.iloc[-22]) / closes.iloc[-22]) if len(closes) >= 22 else 0
+
+                  avg_vol  = volumes[-20:].mean() if len(volumes) >= 20 else volumes.mean()
+                  avg_vol5 = volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
+                  vol_surge = float(avg_vol5/avg_vol) if avg_vol > 0 else 0
+
+                  pct_from_ma21 = float((price - float(ma21)) / float(ma21))
+                  pct_from_high = float((float(high52) - price) / float(high52))
+                  pct_from_low  = float((price - float(low52)) / float(low52)) if low52 > 0 else 0
+
+                  unr = False
+                  lookback = closes[-10:]
+                  if len(lookback) >= 3:
+                      min_in_window  = lookback.min()
+                      undercut_ma21  = min_in_window < float(ma21) * 0.99
+                      now_above_ma21 = price > float(ma21)
+                      undercut_ma50  = min_in_window < float(ma50) * 0.99
+                      now_above_ma50 = price > float(ma50)
+                      unr = (undercut_ma21 and now_above_ma21) or (undercut_ma50 and now_above_ma50)
+
+                  return {
+                      'ticker':        ticker,
+                      'name':          info.get('shortName', ticker)[:25],
+                      'price':         float(price),
+                      'atr':           atr,
+                      'atr_pct':       atr/float(price)*100,
+                      'ma21':          float(ma21),
+                      'ma50':          float(ma50),
+                      'ma200':         float(ma200),
+                      'high52':        float(high52),
+                      'low52':         float(low52),
+                      'ret_12m':       ret_12m,
+                      'ret_6m':        ret_6m,
+                      'ret_3m':        ret_3m,
+                      'ret_1m':        ret_1m,
+                      'vol_surge':     vol_surge,
+                      'pct_from_ma21': pct_from_ma21,
+                      'pct_from_high': pct_from_high,
+                      'pct_from_low':  pct_from_low,
+                      'unr':           unr,
+                  }
+              except Exception as e:
+                  print(ticker + ' error: ' + str(e))
+                  return None
+
+          def calc_composite_return(d):
+              return 0.3 * d['ret_12m'] + 0.3 * d['ret_6m'] + 0.4 * d['ret_3m']
+
+          def calc_rs_rating(stock_composite, all_composites):
+              if not all_composites: return 50
+              rank = sum(1 for r in all_composites if r < stock_composite)
+              return round(rank / len(all_composites) * 100)
+
+          def score_setup(d, rs_rating, spy):
+              score = 0
+              signals = []
+
+              if rs_rating >= RS_PASS:
+                  score += 35; signals.append('RS ' + str(rs_rating) + ' PASS')
+              elif rs_rating >= 70:
+                  score += 15; signals.append('RS ' + str(rs_rating))
+              else:
+                  return None, []  # ไม่เข้า TOP SETUPS ถ้า RS < 70
+
+              pfm = d['pct_from_ma21']
+              if -0.03 <= pfm <= 0.05:
+                  score += 25; signals.append('At 21DMA')
+              elif -0.08 <= pfm <= 0.10:
+                  score += 15; signals.append(str(round(pfm*100, 1)) + '% from 21DMA')
+              elif pfm > 0.10:
+                  score += 5; signals.append(str(round(pfm*100, 1)) + '% above 21DMA (extended)')
+
+              if d['price'] > d['ma50'] > d['ma200']:
+                  score += 10; signals.append('MA stack')
+
+              if d['pct_from_high'] <= 0.05:
+                  score += 10; signals.append('At 52W High')
+              elif d['pct_from_high'] <= 0.15:
+                  score += 5; signals.append(str(round(d['pct_from_high']*100)) + '% from High')
+
+              if d['ret_12m'] > spy['12m'] * 1.5:
+                  score += 5; signals.append('12M >SPY x1.5')
+
+              if d['unr']:
+                  score += 10; signals.append('🎁 UnR pattern')
+
+              return score, signals
+
+          def fmt_cap(mktcap):
+              if mktcap >= 1e9:   return str(round(mktcap/1e9, 1)) + 'B'
+              elif mktcap >= 1e6: return str(round(mktcap/1e6)) + 'M'
+              return 'N/A'
+
+          def main():
+              print('Starting RS + SCTR-Proxy Scanner...')
+              today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
+
+              spy = fetch_spy()
+              print('SPY 12M/6M/3M: ' + str(round(spy['12m']*100,1)) + '% / ' +
+                    str(round(spy['6m']*100,1)) + '% / ' + str(round(spy['3m']*100,1)) + '%')
+
+              all_tickers = list(dict.fromkeys([t for tickers in THEMES.values() for t in tickers]))
+              print('Fetching ' + str(len(all_tickers)) + ' stocks...')
+
+              stock_data = {}
+              for i, ticker in enumerate(all_tickers):
+                  d = fetch_stock(ticker)
+                  if d:
+                      stock_data[ticker] = d
+                  print('  [' + str(i+1) + '/' + str(len(all_tickers)) + '] ' + ticker)
+                  time.sleep(0.3)
+
+              all_composites = [calc_composite_return(d) for d in stock_data.values()]
+
+              # ============================================================
+              # FIX: แยก theme ranking ออกจาก score filter
+              # theme_rs คำนวณจาก composite return ของทุก ticker ที่ fetch ได้
+              # ไม่ขึ้นกับ RS threshold — ทำให้ LEADING THEMES แสดงเสมอ
+              # ============================================================
+              theme_rs = {}
+              for theme, tickers in THEMES.items():
+                  composites = []
+                  for ticker in tickers:
+                      if ticker not in stock_data: continue
+                      composites.append(calc_composite_return(stock_data[ticker]))
+                  if composites:
+                      # avg RS percentile ของ ticker ใน theme นี้
+                      rs_list = []
+                      for ticker in tickers:
+                          if ticker not in stock_data: continue
+                          comp = calc_composite_return(stock_data[ticker])
+                          rs_list.append(calc_rs_rating(comp, all_composites))
+                      theme_rs[theme] = round(sum(rs_list) / len(rs_list))
+
+              sorted_themes = sorted(theme_rs.items(), key=lambda x: -x[1])
+
+              # TOP SETUPS — ยัง filter RS >= 70 เหมือนเดิม
+              theme_results = {}
+              for theme, tickers in THEMES.items():
+                  theme_stocks = []
+                  for ticker in tickers:
+                      if ticker not in stock_data: continue
+                      d = stock_data[ticker]
+                      composite = calc_composite_return(d)
+                      rs = calc_rs_rating(composite, all_composites)
+                      score, signals = score_setup(d, rs, spy)
+                      if score is None: continue
+                      p   = d['price']
+                      atr = d['atr']
+                      sl  = round(p - 1.5*atr, 2)
+                      tp1 = round(p + 1.5*atr, 2)
+                      tp2 = round(p + 3.0*atr, 2)
+                      tp3 = round(p + 6.0*atr, 2)
+                      theme_stocks.append({
+                          'ticker':        ticker,
+                          'name':          d['name'],
+                          'rs':            rs,
+                          'score':         score,
+                          'price':         p,
+                          'ret_12m':       d['ret_12m'],
+                          'ret_3m':        d['ret_3m'],
+                          'pct_from_ma21': d['pct_from_ma21'],
+                          'pct_from_high': d['pct_from_high'],
+                          'atr_pct':       d['atr_pct'],
+                          'unr':           d['unr'],
+                          'signals':       ' / '.join(signals),
+                          'sl':  sl,   'sl_pct':  round((sl-p)/p*100, 1),
+                          'tp1': tp1,  'tp1_pct': round((tp1-p)/p*100, 1),
+                          'tp2': tp2,  'tp2_pct': round((tp2-p)/p*100, 1),
+                          'tp3': tp3,  'tp3_pct': round((tp3-p)/p*100, 1),
+                      })
+                  if theme_stocks:
+                      theme_stocks.sort(key=lambda x: -x['score'])
+                      theme_results[theme] = theme_stocks
+
+              send(
+                  '<b>RS + SCTR-Proxy Scanner - ' + today + '</b>\n'
+                  'RS Rank = percentile vs ' + str(len(stock_data)) + ' tickers (12M/6M/3M weighted, ~SCTR proxy)\n'
+                  'Checklist item 1 PASS = RS &gt;= ' + str(RS_PASS) + '\n'
+                  '21DMA = pullback zone | UnR = bonus item 6\n'
+                  'SL=1.5xATR / TP=1.5/3/6xATR\n'
+                  'SPY 12M: ' + ('+' if spy["12m"] >= 0 else '') + str(round(spy['12m']*100, 1)) + '%'
+              )
+
+              # LEADING THEMES — แสดงเสมอ ไม่ขึ้นกับ RS filter
+              theme_msg = '<b>LEADING THEMES (Top 5 = checklist item 2)</b>\n'
+              for i, (theme, rs) in enumerate(sorted_themes[:8]):
+                  flag  = '✅ TOP5' if i < 5 else ''
+                  emoji = '🔥' if rs >= 85 else ('♨️' if rs >= 70 else '❄️')
+                  has_setup = '📋' if theme in theme_results else ''
+                  theme_msg += (str(i+1) + '. ' + theme +
+                                ' — RS ' + str(rs) + ' ' + emoji +
+                                ' ' + flag + ' ' + has_setup + '\n')
+              send(theme_msg)
+
+              # TOP SETUPS — เฉพาะ theme ที่ติด top 5 และมี setup RS >= 70
+              top_themes = [t for t, _ in sorted_themes[:5]]
+              for theme in top_themes:
+                  if theme not in theme_results:
+                      # แจ้งว่าไม่มี setup แทนที่จะ skip เงียบๆ
+                      send('<b>TOP SETUPS: ' + theme + '</b> (Theme RS: ' + str(theme_rs[theme]) + ')\n'
+                           '⚠️ ไม่มีหุ้นผ่าน RS &gt;= 70 วันนี้ — theme leading แต่ยังไม่มี setup')
+                      continue
+                  stocks = theme_results[theme][:TOP_N]
+                  msg = '<b>TOP SETUPS: ' + theme + '</b> (Theme RS: ' + str(theme_rs[theme]) + ')\n'
+                  for i, s in enumerate(stocks):
+                      ma21_str = str(round(s['pct_from_ma21']*100, 1))
+                      sign     = '+' if float(ma21_str) >= 0 else ''
+                      pass_tag = '✅' if s['rs'] >= RS_PASS else '👀'
+                      unr_tag  = ' 🎁UnR' if s['unr'] else ''
+                      msg += (
+                          '\n' + pass_tag + ' #' + str(i+1) + ' ' + s['ticker'] +
+                          ' RS:' + str(s['rs']) + ' Score:' + str(s['score']) + unr_tag + '\n'
+                          '$' + str(round(s['price'],2)) +
+                          ' | 21DMA: ' + sign + ma21_str + '%' +
+                          ' | ATR:' + str(round(s['atr_pct'],1)) + '%\n'
+                          '12M:+' + str(round(s['ret_12m']*100)) + '%' +
+                          ' | 3M:+' + str(round(s['ret_3m']*100)) + '%\n'
+                          'Buy: $' + str(round(s['price'],2)) + '\n'
+                          'SL:  $' + str(s['sl'])  + ' (' + str(s['sl_pct'])  + '%)\n'
+                          'TP1: $' + str(s['tp1']) + ' (+' + str(s['tp1_pct']) + '%)\n'
+                          'TP2: $' + str(s['tp2']) + ' (+' + str(s['tp2_pct']) + '%)\n'
+                          'TP3: $' + str(s['tp3']) + ' (+' + str(s['tp3_pct']) + '%)\n'
+                          + s['signals']
+                      )
+                  send(msg)
+
+              print('Done.')
+
+          main()
+          PYEOF
+
+      - name: Run RS scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python rs_bot.py
