@@ -2,26 +2,23 @@ name: News Catalyst Scanner
 
 on:
   schedule:
-    - cron: '0 1 * * 1-5'
+    # 17:35 Bangkok = 10:35 UTC — ส่งพร้อมกับ VI scanner
+    - cron: '35 10 * * 1-5'
   workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: pip install -r requirements.txt
-
       - name: Write news_bot.py
         run: |
           cat > news_bot.py << 'PYEOF'
@@ -55,7 +52,6 @@ jobs:
           def clean(text):
               return html.escape(str(text))
 
-          # ✅ PATCHED: send() มี fallback
           def send(text):
               if len(text) > 4000:
                   text = text[:3990] + '...'
@@ -66,15 +62,9 @@ jobs:
                       timeout=15,
                   )
                   if r.status_code != 200:
-                      plain = (text
-                          .replace('<b>','').replace('</b>','')
-                          .replace('<i>','').replace('</i>','')
-                      )
-                      requests.post(
-                          'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
-                          json={'chat_id': CHAT_ID, 'text': plain},
-                          timeout=15,
-                      )
+                      plain = text.replace('<b>','').replace('</b>','').replace('<i>','').replace('</i>','')
+                      requests.post('https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                          json={'chat_id': CHAT_ID, 'text': plain}, timeout=15)
               except Exception as e:
                   print('Telegram error: ' + str(e))
               time.sleep(0.5)
@@ -82,10 +72,10 @@ jobs:
           def get_company_news(ticker):
               today = datetime.now().strftime('%Y-%m-%d')
               yesterday = (datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d')
-              url = 'https://finnhub.io/api/v1/company-news'
-              params = {'symbol': ticker, 'from': yesterday, 'to': today, 'token': FINNHUB_KEY}
               try:
-                  r = requests.get(url, params=params, timeout=10)
+                  r = requests.get('https://finnhub.io/api/v1/company-news',
+                      params={'symbol': ticker, 'from': yesterday, 'to': today, 'token': FINNHUB_KEY},
+                      timeout=10)
                   data = r.json()
                   return data if isinstance(data, list) else []
               except:
@@ -95,18 +85,14 @@ jobs:
               text = (headline + ' ' + summary).lower()
               bull_score = 0; bear_score = 0; matched = []
               for kw in BULLISH_KEYWORDS:
-                  if kw in text:
-                      bull_score += 1; matched.append(kw)
+                  if kw in text: bull_score += 1; matched.append(kw)
               for kw in BEARISH_KEYWORDS:
-                  if kw in text:
-                      bear_score += 1
+                  if kw in text: bear_score += 1
               return bull_score, bear_score, matched
 
           def calc_atr(hist, period=14):
               if hist.empty or len(hist) < 2: return 0
-              highs  = hist['High'].values
-              lows   = hist['Low'].values
-              closes = hist['Close'].values
+              highs = hist['High'].values; lows = hist['Low'].values; closes = hist['Close'].values
               trs = []
               for i in range(1, min(period+1, len(closes))):
                   tr = max(highs[-i]-lows[-i], abs(highs[-i]-closes[-i-1]), abs(lows[-i]-closes[-i-1]))
@@ -123,38 +109,28 @@ jobs:
                   hist = t.history(period='3mo')
                   atr = calc_atr(hist) if not hist.empty else float(price) * 0.05
                   return {
-                      'price':   float(price),
-                      'mktcap':  info.get('marketCap') or 0,
-                      'vol':     info.get('volume') or 0,
-                      'avg_vol': info.get('averageVolume') or 1,
-                      'name':    info.get('shortName', ticker)[:30],
-                      'atr':     atr,
+                      'price': float(price), 'mktcap': info.get('marketCap') or 0,
+                      'vol': info.get('volume') or 0, 'avg_vol': info.get('averageVolume') or 1,
+                      'name': info.get('shortName', ticker)[:30], 'atr': atr,
                       'atr_pct': atr / float(price) * 100,
                   }
               except:
                   return None
 
           def fmt_cap(mktcap):
-              if mktcap >= 1e9:   return str(round(mktcap/1e9, 1)) + 'B'
+              if mktcap >= 1e9: return str(round(mktcap/1e9, 1)) + 'B'
               elif mktcap >= 1e6: return str(round(mktcap/1e6)) + 'M'
               return 'N/A'
 
           def main():
-              print('Starting News Catalyst Scanner...')
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
-
               WATCHLIST = [
-                  'FCEL','ELPW','KEEL','PLUG','BE','BLDP',
-                  'SMR','OKLO','NNE','IONQ','QBTS','QUBT',
-                  'BBAI','SOUN','APLD','ARRY','NOVA',
-                  'MVST','ENVX','ASTS','ACHR','JOBY',
-                  'SMCI','COHR','VRT','TDIC','BWEN',
-                  'BZFD','STAK','ERNA','HTCO','GAUZ',
+                  'FCEL','KEEL','PLUG','BE','BLDP','SMR','OKLO','NNE',
+                  'IONQ','QBTS','QUBT','BBAI','SOUN','APLD','ASTS',
+                  'SMCI','COHR','VRT','RKLB','LUNR','HUT','CORZ',
               ]
-
               results = []
               cutoff = time.time() - 86400
-
               for ticker in WATCHLIST:
                   news_list = get_company_news(ticker)
                   if not news_list: continue
@@ -162,8 +138,7 @@ jobs:
                   if not recent: continue
                   total_bull = 0; total_bear = 0; headlines = []
                   for news in recent[:5]:
-                      h = news.get('headline', '')
-                      s = news.get('summary', '')
+                      h = news.get('headline', ''); s = news.get('summary', '')
                       b, br, matched = score_headline(h, s)
                       total_bull += b; total_bear += br
                       if b > 0 and h: headlines.append(h[:70])
@@ -173,63 +148,38 @@ jobs:
                   if stock['mktcap'] > 5e9: continue
                   vol_ratio = stock['vol'] / stock['avg_vol'] if stock['avg_vol'] > 0 else 0
                   score = total_bull * 20
-                  if vol_ratio >= 3:     score += 30
+                  if vol_ratio >= 3: score += 30
                   elif vol_ratio >= 1.5: score += 15
                   if stock['mktcap'] < 500e6: score += 10
-                  p   = stock['price']
-                  atr = stock['atr']
-                  sl  = round(p - 2.0 * atr, 2)
-                  tp1 = round(p + 2.0 * atr, 2)
-                  tp2 = round(p + 4.0 * atr, 2)
-                  tp3 = round(p + 8.0 * atr, 2)
+                  p = stock['price']; atr = stock['atr']
                   results.append({
-                      'ticker':    ticker,
-                      'name':      stock['name'],
-                      'price':     p,
-                      'mktcap':    stock['mktcap'],
-                      'vol_ratio': vol_ratio,
-                      'score':     score,
-                      'atr_pct':   stock['atr_pct'],
-                      'sl':  sl,   'sl_pct':  round((sl-p)/p*100, 1),
-                      'tp1': tp1,  'tp1_pct': round((tp1-p)/p*100, 1),
-                      'tp2': tp2,  'tp2_pct': round((tp2-p)/p*100, 1),
-                      'tp3': tp3,  'tp3_pct': round((tp3-p)/p*100, 1),
+                      'ticker': ticker, 'name': stock['name'], 'price': p,
+                      'mktcap': stock['mktcap'], 'vol_ratio': vol_ratio, 'score': score,
+                      'atr_pct': stock['atr_pct'],
+                      'sl': round(p-2*atr,2), 'sl_pct': round((p-2*atr-p)/p*100,1),
+                      'tp1': round(p+2*atr,2), 'tp1_pct': round((2*atr)/p*100,1),
+                      'tp2': round(p+4*atr,2), 'tp2_pct': round((4*atr)/p*100,1),
+                      'tp3': round(p+8*atr,2), 'tp3_pct': round((8*atr)/p*100,1),
                       'headlines': headlines[:1],
                   })
                   time.sleep(0.3)
-
               results.sort(key=lambda x: -x['score'])
-
-              send(
-                  '<b>News Catalyst Scanner - ' + today + '</b>\n'
-                  'M&amp;A / AI / Contract / FDA\n'
-                  'SL/TP based on ATR 14d\n'
-                  'High risk — verify before trading.'
-              )
-
+              send('<b>News Catalyst Scanner - ' + today + '</b>\nM&amp;A / AI / Contract / FDA\nSL/TP based on ATR 14d\nHigh risk — verify before trading.')
               if results:
                   for i, s in enumerate(results[:TOP_N]):
                       headline_str = ('\n  ' + clean(s['headlines'][0])) if s['headlines'] else ''
-                      msg = (
-                          '#' + str(i+1) + ' <b>' + s['ticker'] + '</b> - ' + clean(s['name']) + '\n'
-                          'Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']) + ' | ATR: ' + str(round(s['atr_pct'], 1)) + '%\n'
-                          'Buy:  $' + str(round(s['price'], 2)) + ' | ' + str(round(s['vol_ratio'], 1)) + 'x vol\n'
-                          'SL:   $' + str(s['sl'])  + ' (' + str(s['sl_pct'])  + '%)\n'
+                      msg = ('#' + str(i+1) + ' <b>' + s['ticker'] + '</b> - ' + clean(s['name']) + '\n'
+                          'Score: ' + str(s['score']) + ' | Cap: ' + fmt_cap(s['mktcap']) + ' | ATR: ' + str(round(s['atr_pct'],1)) + '%\n'
+                          'Buy:  $' + str(round(s['price'],2)) + ' | ' + str(round(s['vol_ratio'],1)) + 'x vol\n'
+                          'SL:   $' + str(s['sl']) + ' (' + str(s['sl_pct']) + '%)\n'
                           'TP1:  $' + str(s['tp1']) + ' (+' + str(s['tp1_pct']) + '%)\n'
                           'TP2:  $' + str(s['tp2']) + ' (+' + str(s['tp2_pct']) + '%)\n'
-                          'TP3:  $' + str(s['tp3']) + ' (+' + str(s['tp3_pct']) + '%)'
-                          + headline_str
-                      )
-                      send(msg)
-                      time.sleep(0.5)
+                          'TP3:  $' + str(s['tp3']) + ' (+' + str(s['tp3_pct']) + '%)' + headline_str)
+                      send(msg); time.sleep(0.5)
               else:
                   send('No catalyst stocks found today.')
-
-              print('Done.')
-
           main()
           PYEOF
-
       - name: Run news scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
