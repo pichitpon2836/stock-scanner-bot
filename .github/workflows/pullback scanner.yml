@@ -1,0 +1,33 @@
+name: Pullback Scanner
+
+on:
+  schedule:
+    # รันทุกวัน จันทร์-ศุกร์ เวลา 23:00 UTC = 06:00 ไทย
+    # หลัง rs_bot.py ที่รัน 23:00 UTC เช่นกัน (ปรับเป็น 23:05 เพื่อไม่ชนกัน)
+    - cron: '5 23 * * 1-5'
+  workflow_dispatch:
+    # รัน manual ได้จาก GitHub Actions tab
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Pullback Scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python pullback_scanner.py
