@@ -1,0 +1,29 @@
+# DREAMS Trading Co. — Scanner Universe
+# อัปเดตทุกอาทิตย์ (วันอาทิตย์) จาก:
+# - @TradersLab_ Liquid Leaders 21DMA list + RS Rank list
+# - @PrimeTrading_ (Alex) Prime Report Focus List
+# - deepvue.com/nick-drendel Leaders acted
+#
+# เกณฑ์คัดเข้า universe:
+# ✅ ราคา ≤ $300
+# ✅ Top 5 Theme (Semi Equip / Connectivity / Memory / AI Hardware / Power Semi)
+# ✅ RS > 85
+# ✅ ATR ≤ 10%
+# ❌ ไม่ใช่ Nano cap / China risk / Reverse split
+#
+# อัปเดตล่าสุด: 25 มิ.ย. 2026
+# Sources: TradersLab 21DMA + RS Rank / Alex Prime Report / Nick Drendel
+
+ICHR
+UCTT
+NBIS
+INTC
+LITE
+CRDO
+HPE
+LSCC
+MKSI
+MXL
+FLEX
+AMKR
+KLIC
