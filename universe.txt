@@ -3,6 +3,7 @@
 # - @TradersLab_ Liquid Leaders 21DMA list + RS Rank list
 # - @PrimeTrading_ (Alex) Prime Report Focus List
 # - deepvue.com/nick-drendel Leaders acted
+# - Grok scan รวม tickers จาก 4 sources
 #
 # เกณฑ์คัดเข้า universe:
 # ✅ ราคา ≤ $300
@@ -11,19 +12,19 @@
 # ✅ ATR ≤ 10%
 # ❌ ไม่ใช่ Nano cap / China risk / Reverse split
 #
-# อัปเดตล่าสุด: 25 มิ.ย. 2026
-# Sources: TradersLab 21DMA + RS Rank / Alex Prime Report / Nick Drendel
+# อัปเดตล่าสุด: 28 มิ.ย. 2026
+# Sources: Grok scan 4 accounts + RS Scanner 28 มิ.ย.
 
 ICHR
 UCTT
 NBIS
 INTC
-LITE
-CRDO
-HPE
+ACMR
+FLEX
+AMKR
+VIAV
 LSCC
 MKSI
 MXL
-FLEX
-AMKR
+COHU
 KLIC
