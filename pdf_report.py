@@ -8,6 +8,10 @@ Features:
 - สรุป Win/Loss ratio, Best/Worst positions
 - ส่ง PDF เข้า Telegram อัตโนมัติ
 - รันผ่าน GitHub Actions ทุกสิ้นเดือน
+
+อัปเดต 30 มิ.ย. 2026: ปรับ PORTFOLIO ให้ตรงกับ paper account ปัจจุบัน
+(เดิมเป็นพอร์ต Phase ก่อนหน้า ทุน $10,000 / 7 positions — ตอนนี้เป็น
+paper trading บน Webull ทุนเริ่ม $1,000 / SL-TP ตาม ATR system)
 """
 
 import os
@@ -36,8 +40,8 @@ TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 COMPANY_NAME = "DREAMS Trading Co."
-CAPITAL      = 10000
-CASH         = 1706
+CAPITAL      = 1000        # ทุนเริ่มต้น paper trading (อัปเดต 30 มิ.ย. 2026)
+CASH         = 869.85      # เงินสดคงเหลือล่าสุด
 TZ           = pytz.timezone("America/New_York")
 
 # สีบริษัท
@@ -52,14 +56,17 @@ C_TEXT   = colors.HexColor("#c8d8f0")
 C_WHITE  = colors.white
 C_LGRAY  = colors.HexColor("#1e2d4a")
 
+# Portfolio ปัจจุบัน (อัปเดต 30 มิ.ย. 2026 — หลังตลาดปิด)
+# Entry/SL/TP มาจาก ATR-based system (SL=1.5xATR, TP1=1.5xATR)
 PORTFOLIO = [
-    {"sym": "SIDU", "qty": 175, "cost": 3.75,   "sl": 3.20, "tp": 6.00},
-    {"sym": "AMD",  "qty": 2,   "cost": 439.39,  "sl": 400,  "tp": 560},
-    {"sym": "PLUG", "qty": 572, "cost": 3.51,    "sl": 3.00, "tp": 4.00},
-    {"sym": "APLD", "qty": 24,  "cost": 42.42,   "sl": 38,   "tp": 55},
-    {"sym": "AMAT", "qty": 5,   "cost": 429.66,  "sl": 400,  "tp": 480},
-    {"sym": "CEG",  "qty": 1,   "cost": 281.20,  "sl": 260,  "tp": 320},
-    {"sym": "VIAV", "qty": 20,  "cost": 50.87,   "sl": 48,   "tp": 58},
+    {"sym": "FLEX", "qty": 1, "cost": 150.05, "sl": 143.00, "tp": 166.86},
+]
+
+# Trade history ที่ปิดไปแล้ว (clean slate phase — ใช้แสดงใน highlights/win-rate)
+CLOSED_TRADES = [
+    {"sym": "OUST", "result_pct": 12.3, "result_usd": 34.55, "note": "Partial exit + stop"},
+    {"sym": "HUT",  "result_pct": -7.6, "result_usd": -9.28, "note": "Stop order ทำงานตามแผน"},
+    {"sym": "FROG", "result_pct": -6.3, "result_usd": -5.22, "note": "Stop order ทำงานตามแผน"},
 ]
 
 # ════════════════════════════════════════
@@ -103,13 +110,19 @@ def build_pdf(positions: list) -> bytes:
 
     valid    = [p for p in positions if p["price"]]
     sv       = sum(p["value"] for p in valid)
-    total_pnl = sum(p["pnl"] for p in valid)
+    open_pnl = sum(p["pnl"] for p in valid)
+    closed_pnl = sum(t["result_usd"] for t in CLOSED_TRADES)
+    total_pnl = open_pnl + closed_pnl
     total_v  = sv + CASH
     yret     = (total_pnl / CAPITAL) * 100
-    wins     = [p for p in valid if p["pnl"] >= 0]
-    losses   = [p for p in valid if p["pnl"] < 0]
-    best     = max(valid, key=lambda x: x["pnl"]) if valid else None
-    worst    = min(valid, key=lambda x: x["pnl"]) if valid else None
+
+    # Win rate รวม open + closed positions
+    all_results = [p["pnl"] for p in valid] + [t["result_usd"] for t in CLOSED_TRADES]
+    wins   = [r for r in all_results if r >= 0]
+    losses = [r for r in all_results if r < 0]
+
+    best  = max(valid, key=lambda x: x["pnl"]) if valid else None
+    worst = min(valid, key=lambda x: x["pnl"]) if valid else None
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -120,21 +133,12 @@ def build_pdf(positions: list) -> bytes:
 
     styles = getSampleStyleSheet()
 
-    # Custom styles
     def sty(name, **kw):
         return ParagraphStyle(name, **kw)
 
-    s_title = sty("title", fontName="Helvetica-Bold", fontSize=22,
-                  textColor=C_GOLD, spaceAfter=2)
-    s_sub   = sty("sub", fontName="Helvetica", fontSize=10,
-                  textColor=C_DIM, spaceAfter=8)
     s_h2    = sty("h2", fontName="Helvetica-Bold", fontSize=13,
                   textColor=C_GOLD, spaceBefore=10, spaceAfter=6)
-    s_body  = sty("body", fontName="Helvetica", fontSize=9,
-                  textColor=C_TEXT, leading=14)
     s_small = sty("small", fontName="Helvetica", fontSize=8, textColor=C_DIM)
-    s_green = sty("green", fontName="Helvetica-Bold", fontSize=11, textColor=C_GREEN)
-    s_red   = sty("red",   fontName="Helvetica-Bold", fontSize=11, textColor=C_RED)
 
     story = []
 
@@ -142,7 +146,7 @@ def build_pdf(positions: list) -> bytes:
     header_data = [[
         Paragraph(f"★  {COMPANY_NAME}", sty("hn", fontName="Helvetica-Bold",
                   fontSize=20, textColor=C_GOLD)),
-        Paragraph(f"Monthly P&L Report<br/><font size=9 color='#4a6080'>{month_str}</font>",
+        Paragraph(f"Monthly P&L Report (Paper Trading)<br/><font size=9 color='#4a6080'>{month_str}</font>",
                   sty("hr", fontName="Helvetica", fontSize=12,
                       textColor=C_TEXT, alignment=2))
     ]]
@@ -162,9 +166,9 @@ def build_pdf(positions: list) -> bytes:
 
     cards = [
         ["TOTAL P&L", pnl_str(total_pnl), pct_str(yret), C_GREEN if total_pnl>=0 else C_RED],
-        ["STOCK VALUE", f"${sv:,.0f}", f"{len(valid)} positions", C_BLUE],
-        ["CASH",  f"${CASH:,}", f"Total ${total_v:,.0f}", C_GOLD],
-        ["WIN RATE", f"{len(wins)}/{len(valid)}", f"Loss: {len(losses)}", C_GREEN if len(wins)>len(losses) else C_RED],
+        ["OPEN POSITIONS", f"${sv:,.2f}", f"{len(valid)} position(s)", C_BLUE],
+        ["CASH",  f"${CASH:,.2f}", f"Total ${total_v:,.2f}", C_GOLD],
+        ["WIN RATE", f"{len(wins)}/{len(all_results)}", f"Loss: {len(losses)}", C_GREEN if len(wins)>=len(losses) else C_RED],
     ]
 
     card_rows = []
@@ -191,86 +195,96 @@ def build_pdf(positions: list) -> bytes:
     story.append(card_table)
     story.append(Spacer(1, 12))
 
-    # ── HOLDINGS TABLE ──
-    story.append(Paragraph("📊 Holdings", s_h2))
+    # ── OPEN POSITIONS TABLE ──
+    story.append(Paragraph("📊 Open Positions", s_h2))
 
-    sorted_pos = sorted(valid, key=lambda x: x["pnl"], reverse=True)
-    tbl_data   = [[
-        Paragraph("TICKER", sty("th", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
-        Paragraph("QTY",    sty("th2", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
-        Paragraph("COST",   sty("th3", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
-        Paragraph("PRICE",  sty("th4", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
-        Paragraph("VALUE",  sty("th5", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
-        Paragraph("P&L $",  sty("th6", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
-        Paragraph("P&L %",  sty("th7", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
-        Paragraph("SL / TP",sty("th8", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
-    ]]
+    if valid:
+        sorted_pos = sorted(valid, key=lambda x: x["pnl"], reverse=True)
+        tbl_data   = [[
+            Paragraph("TICKER", sty("th", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("QTY",    sty("th2", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("ENTRY",  sty("th3", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("PRICE",  sty("th4", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("VALUE",  sty("th5", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("P&L $",  sty("th6", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("P&L %",  sty("th7", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("SL / TP1",sty("th8", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+        ]]
 
-    row_styles = [
-        ("BACKGROUND", (0,0), (-1,0), C_DARK),
-        ("GRID",       (0,0), (-1,-1), 0.5, C_LGRAY),
-        ("PADDING",    (0,0), (-1,-1), 6),
-        ("FONTNAME",   (0,0), (-1,-1), "Helvetica"),
-        ("FONTSIZE",   (0,0), (-1,-1), 8),
-        ("TEXTCOLOR",  (0,0), (-1,-1), C_TEXT),
-        ("ROWBACKGROUNDS", (0,1), (-1,-1), [C_PANEL, C_DARK]),
-    ]
+        row_styles = [
+            ("BACKGROUND", (0,0), (-1,0), C_DARK),
+            ("GRID",       (0,0), (-1,-1), 0.5, C_LGRAY),
+            ("PADDING",    (0,0), (-1,-1), 6),
+            ("FONTNAME",   (0,0), (-1,-1), "Helvetica"),
+            ("FONTSIZE",   (0,0), (-1,-1), 8),
+            ("TEXTCOLOR",  (0,0), (-1,-1), C_TEXT),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [C_PANEL, C_DARK]),
+        ]
 
-    for i, p in enumerate(sorted_pos):
-        col = C_GREEN if p["pnl"] >= 0 else C_RED
+        for i, p in enumerate(sorted_pos):
+            col = C_GREEN if p["pnl"] >= 0 else C_RED
+            tbl_data.append([
+                Paragraph(f"<b>{p['sym']}</b>",   sty(f"td{i}a", fontName="Helvetica-Bold", fontSize=9, textColor=C_GOLD)),
+                Paragraph(str(p["qty"]),           sty(f"td{i}b", fontSize=8, textColor=C_TEXT, fontName="Helvetica")),
+                Paragraph(f"${p['cost']:.2f}",     sty(f"td{i}c", fontSize=8, textColor=C_DIM,  fontName="Helvetica")),
+                Paragraph(f"${p['price']:.2f}",    sty(f"td{i}d", fontSize=8, textColor=C_TEXT, fontName="Helvetica")),
+                Paragraph(f"${p['value']:,.2f}",   sty(f"td{i}e", fontSize=8, textColor=C_TEXT, fontName="Helvetica")),
+                Paragraph(pnl_str(p["pnl"]),       sty(f"td{i}f", fontSize=8, textColor=col,   fontName="Helvetica-Bold")),
+                Paragraph(pct_str(p["pct"]),       sty(f"td{i}g", fontSize=8, textColor=col,   fontName="Helvetica-Bold")),
+                Paragraph(f"SL ${p['sl']} / TP1 ${p['tp']}", sty(f"td{i}h", fontSize=7, textColor=C_DIM, fontName="Helvetica")),
+            ])
+
         tbl_data.append([
-            Paragraph(f"<b>{p['sym']}</b>",   sty(f"td{i}a", fontName="Helvetica-Bold", fontSize=9, textColor=C_GOLD)),
-            Paragraph(str(p["qty"]),           sty(f"td{i}b", fontSize=8, textColor=C_TEXT, fontName="Helvetica")),
-            Paragraph(f"${p['cost']:.2f}",     sty(f"td{i}c", fontSize=8, textColor=C_DIM,  fontName="Helvetica")),
-            Paragraph(f"${p['price']:.2f}",    sty(f"td{i}d", fontSize=8, textColor=C_TEXT, fontName="Helvetica")),
-            Paragraph(f"${p['value']:,.0f}",   sty(f"td{i}e", fontSize=8, textColor=C_TEXT, fontName="Helvetica")),
-            Paragraph(pnl_str(p["pnl"]),       sty(f"td{i}f", fontSize=8, textColor=col,   fontName="Helvetica-Bold")),
-            Paragraph(pct_str(p["pct"]),       sty(f"td{i}g", fontSize=8, textColor=col,   fontName="Helvetica-Bold")),
-            Paragraph(f"SL ${p['sl']} / TP ${p['tp']}", sty(f"td{i}h", fontSize=7, textColor=C_DIM, fontName="Helvetica")),
+            Paragraph("<b>TOTAL</b>", sty("tft", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("", s_small), Paragraph("", s_small),
+            Paragraph("", s_small),
+            Paragraph(f"${sv:,.2f}", sty("tfv", fontName="Helvetica-Bold", fontSize=8, textColor=C_TEXT)),
+            Paragraph(pnl_str(open_pnl), sty("tfp", fontName="Helvetica-Bold", fontSize=8,
+                      textColor=C_GREEN if open_pnl>=0 else C_RED)),
+            Paragraph("", s_small),
+            Paragraph("", s_small),
         ])
+        row_styles.append(("BACKGROUND", (0, len(tbl_data)-1), (-1,-1), C_DARK))
+        row_styles.append(("LINEABOVE",  (0, len(tbl_data)-1), (-1,-1), 1, C_GOLD))
 
-    # Total row
-    tbl_data.append([
-        Paragraph("<b>TOTAL</b>", sty("tft", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
-        Paragraph("", s_small), Paragraph("", s_small),
-        Paragraph("", s_small),
-        Paragraph(f"${sv:,.0f}", sty("tfv", fontName="Helvetica-Bold", fontSize=8, textColor=C_TEXT)),
-        Paragraph(pnl_str(total_pnl), sty("tfp", fontName="Helvetica-Bold", fontSize=8,
-                  textColor=C_GREEN if total_pnl>=0 else C_RED)),
-        Paragraph(pct_str(yret), sty("tfr", fontName="Helvetica-Bold", fontSize=8,
-                  textColor=C_GREEN if yret>=0 else C_RED)),
-        Paragraph("", s_small),
-    ])
-    row_styles.append(("BACKGROUND", (0, len(tbl_data)-1), (-1,-1), C_DARK))
-    row_styles.append(("LINEABOVE",  (0, len(tbl_data)-1), (-1,-1), 1, C_GOLD))
+        hold_tbl = Table(tbl_data, colWidths=["12%","8%","12%","12%","14%","14%","10%","18%"])
+        hold_tbl.setStyle(TableStyle(row_styles))
+        story.append(hold_tbl)
+    else:
+        story.append(Paragraph("ไม่มี open position ในขณะนี้", sty("nopos", fontName="Helvetica", fontSize=9, textColor=C_DIM)))
 
-    hold_tbl = Table(tbl_data, colWidths=["12%","8%","10%","10%","12%","13%","10%","25%"])
-    hold_tbl.setStyle(TableStyle(row_styles))
-    story.append(hold_tbl)
     story.append(Spacer(1, 12))
 
-    # ── P&L BAR CHART ──
-    story.append(Paragraph("📈 P&L By Position", s_h2))
-
-    drawing = Drawing(170*mm, 60*mm)
-    bc = VerticalBarChart()
-    bc.x  = 10*mm
-    bc.y  = 8*mm
-    bc.width  = 150*mm
-    bc.height = 48*mm
-    bc.data   = [[p["pnl"] for p in sorted_pos]]
-    bc.categoryAxis.categoryNames = [p["sym"] for p in sorted_pos]
-    bc.categoryAxis.labels.fontName  = "Helvetica"
-    bc.categoryAxis.labels.fontSize  = 7
-    bc.valueAxis.labels.fontName     = "Helvetica"
-    bc.valueAxis.labels.fontSize     = 7
-    bc.valueAxis.strokeColor         = colors.HexColor("#1e2d4a")
-    bc.categoryAxis.strokeColor      = colors.HexColor("#1e2d4a")
-    bc.bars[0].fillColor = C_GREEN
-
-    drawing.add(bc)
-    story.append(drawing)
-    story.append(Spacer(1, 10))
+    # ── CLOSED TRADES TABLE ──
+    if CLOSED_TRADES:
+        story.append(Paragraph("📁 Closed Trades (Clean Slate Phase)", s_h2))
+        ct_data = [[
+            Paragraph("TICKER", sty("cth", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("P&L $",  sty("cth2", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("P&L %",  sty("cth3", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+            Paragraph("หมายเหตุ", sty("cth4", fontName="Helvetica-Bold", fontSize=8, textColor=C_GOLD)),
+        ]]
+        ct_styles = [
+            ("BACKGROUND", (0,0), (-1,0), C_DARK),
+            ("GRID",       (0,0), (-1,-1), 0.5, C_LGRAY),
+            ("PADDING",    (0,0), (-1,-1), 6),
+            ("FONTNAME",   (0,0), (-1,-1), "Helvetica"),
+            ("FONTSIZE",   (0,0), (-1,-1), 8),
+            ("TEXTCOLOR",  (0,0), (-1,-1), C_TEXT),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [C_PANEL, C_DARK]),
+        ]
+        for i, t in enumerate(CLOSED_TRADES):
+            col = C_GREEN if t["result_usd"] >= 0 else C_RED
+            ct_data.append([
+                Paragraph(f"<b>{t['sym']}</b>", sty(f"ctd{i}a", fontName="Helvetica-Bold", fontSize=9, textColor=C_GOLD)),
+                Paragraph(pnl_str(t["result_usd"]), sty(f"ctd{i}b", fontSize=8, textColor=col, fontName="Helvetica-Bold")),
+                Paragraph(pct_str(t["result_pct"]), sty(f"ctd{i}c", fontSize=8, textColor=col, fontName="Helvetica-Bold")),
+                Paragraph(t["note"], sty(f"ctd{i}d", fontSize=8, textColor=C_TEXT, fontName="Helvetica")),
+            ])
+        ct_tbl = Table(ct_data, colWidths=["15%","20%","15%","50%"])
+        ct_tbl.setStyle(TableStyle(ct_styles))
+        story.append(ct_tbl)
+        story.append(Spacer(1, 12))
 
     # ── HIGHLIGHTS ──
     story.append(Paragraph("🏆 Highlights", s_h2))
@@ -278,24 +292,18 @@ def build_pdf(positions: list) -> bytes:
     hi_data = []
     if best:
         hi_data.append([
-            Paragraph("Best Position", sty("hbl", fontName="Helvetica-Bold", fontSize=9, textColor=C_GREEN)),
+            Paragraph("Best Open Position", sty("hbl", fontName="Helvetica-Bold", fontSize=9, textColor=C_GREEN)),
             Paragraph(f"{best['sym']} — {pnl_str(best['pnl'])} ({pct_str(best['pct'])})",
                       sty("hbv", fontName="Helvetica-Bold", fontSize=10, textColor=C_GREEN)),
         ])
-    if worst:
-        hi_data.append([
-            Paragraph("Worst Position", sty("hwl", fontName="Helvetica-Bold", fontSize=9, textColor=C_RED)),
-            Paragraph(f"{worst['sym']} — {pnl_str(worst['pnl'])} ({pct_str(worst['pct'])})",
-                      sty("hwv", fontName="Helvetica-Bold", fontSize=10, textColor=C_RED)),
-        ])
     hi_data.append([
         Paragraph("Win Rate",  sty("wrl", fontName="Helvetica-Bold", fontSize=9, textColor=C_BLUE)),
-        Paragraph(f"{len(wins)}/{len(valid)} positions ({len(wins)/len(valid)*100:.0f}%)" if valid else "N/A",
+        Paragraph(f"{len(wins)}/{len(all_results)} trades ({len(wins)/len(all_results)*100:.0f}%)" if all_results else "N/A",
                   sty("wrv", fontName="Helvetica", fontSize=10, textColor=C_TEXT)),
     ])
     hi_data.append([
         Paragraph("Capital",   sty("cpl", fontName="Helvetica-Bold", fontSize=9, textColor=C_GOLD)),
-        Paragraph(f"เริ่มต้น ${CAPITAL:,} → ปัจจุบัน ${total_v:,.0f} ({pct_str(yret)})",
+        Paragraph(f"เริ่มต้น ${CAPITAL:,} → ปัจจุบัน ${total_v:,.2f} ({pct_str(yret)})",
                   sty("cpv", fontName="Helvetica", fontSize=10, textColor=C_TEXT)),
     ])
 
@@ -315,7 +323,7 @@ def build_pdf(positions: list) -> bytes:
     story.append(HRFlowable(width="100%", thickness=1, color=C_LGRAY))
     story.append(Spacer(1, 4))
     story.append(Paragraph(
-        f"DREAMS Trading Co. · Paper Trade · รายงานประจำ{month_str} · "
+        f"DREAMS Trading Co. · Paper Trade (Webull) · รายงานประจำ{month_str} · "
         f"สร้างเมื่อ {now.strftime('%d/%m/%Y %H:%M ET')}",
         sty("ft", fontName="Helvetica", fontSize=7, textColor=C_DIM, alignment=1)
     ))
@@ -376,7 +384,9 @@ def main():
     positions = calc_positions(prices)
 
     valid     = [p for p in positions if p["price"]]
-    total_pnl = sum(p["pnl"] for p in valid)
+    open_pnl  = sum(p["pnl"] for p in valid)
+    closed_pnl = sum(t["result_usd"] for t in CLOSED_TRADES)
+    total_pnl = open_pnl + closed_pnl
     sv        = sum(p["value"] for p in valid)
     yret      = (total_pnl / CAPITAL) * 100
 
@@ -390,12 +400,14 @@ def main():
     # Caption
     month_en  = now.strftime("%B %Y")
     sign      = "📈" if total_pnl >= 0 else "📉"
+    all_results = [p["pnl"] for p in valid] + [t["result_usd"] for t in CLOSED_TRADES]
+    wins = sum(1 for r in all_results if r >= 0)
     caption = (
         f"📄 *DREAMS Trading Co.*\n"
-        f"Monthly Report — {month_en}\n\n"
+        f"Monthly Report (Paper) — {month_en}\n\n"
         f"{sign} P&L: `{'+'if total_pnl>=0 else ''}${abs(total_pnl):,.2f}` ({yret:+.2f}%)\n"
-        f"💼 Portfolio: `${sv+CASH:,.0f}`\n"
-        f"🏆 Win: `{sum(1 for p in valid if p['pnl']>=0)}/{len(valid)}`"
+        f"💼 Portfolio: `${sv+CASH:,.2f}`\n"
+        f"🏆 Win: `{wins}/{len(all_results)}`"
     )
 
     # Send to Telegram
