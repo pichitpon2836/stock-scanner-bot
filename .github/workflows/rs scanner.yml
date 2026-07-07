@@ -311,7 +311,7 @@ jobs:
 
               # LEADING THEMES — แสดงเสมอ ไม่ขึ้นกับ RS filter
               theme_msg = '<b>LEADING THEMES (Top 5 = checklist item 2)</b>\n'
-              for i, (theme, rs) in enumerate(sorted_themes[:8]):
+              for i, (theme, rs) in enumerate(sorted_themes[:22]):
                   flag  = '✅ TOP5' if i < 5 else ''
                   emoji = '🔥' if rs >= 85 else ('♨️' if rs >= 70 else '❄️')
                   has_setup = '📋' if theme in theme_results else ''
