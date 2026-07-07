@@ -1,32 +1,3 @@
-# DREAMS Trading Co. — Scanner Universe
-# อัปเดตทุกอาทิตย์ (วันอาทิตย์) จาก:
-# - @TradersLab_ Liquid Leaders 21DMA list + RS Rank list
-# - @PrimeTrading_ (Alex) Prime Report Focus List
-# - deepvue.com/nick-drendel Leaders acted
-# - Grok scan รวม tickers จาก 11 sources
-#
-# เกณฑ์คัดเข้า universe:
-# ✅ ราคา ≤ $300
-# ✅ Top 5 Theme (Semi Equip / Connectivity / Memory / AI Hardware / Power Semi)
-# ✅ RS > 85
-# ✅ ATR ≤ 10%
-# ❌ ไม่ใช่ Nano cap / China risk / Reverse split
-#
-# อัปเดตล่าสุด: 2 ก.ค. 2026
-# เพิ่ม VECO — ผ่าน Layer 3 Hard Pre-filter (ราคา $70.52, RS 86, ATR ~8%, Semiconductor Equipment)
-# หมายเหตุ: VECO ยังไม่ผ่าน Volume Gate (0.535x) — ให้ Pullback Scanner ติดตามต่อ ยังไม่เข้า Watchlist/ซื้อจริง
-
-ICHR
-UCTT
-NBIS
-INTC
-ACMR
-FLEX
-AMKR
-VIAV
-LSCC
-MKSI
-MXL
-COHU
-KLIC
-VECO
+ICHR, UCTT, NBIS, INTC, ACMR, FLEX,
+AMKR, VIAV, LSCC, MKSI, MXL, COHU, KLIC, VECO,
+HWM, TOL, CNC
