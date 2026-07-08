@@ -62,8 +62,7 @@ def load_universe() -> list:
         if line.strip() and not line.strip().startswith("#")
         for t in line.split(",")
         if t.strip()
-    ]
-        ]
+    ]   
     print(f"📋 Universe: {len(tickers)} tickers — {', '.join(tickers)}")
     return tickers
 
