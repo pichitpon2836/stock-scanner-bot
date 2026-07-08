@@ -55,10 +55,14 @@ def load_universe() -> list:
         print(f"❌ {UNIVERSE_FILE} not found")
         return []
     with open(UNIVERSE_FILE, "r") as f:
-        tickers = [
-            line.strip().upper()
-            for line in f
-            if line.strip() and not line.startswith("#")
+        content = f.read()
+    tickers = [
+        t.strip().upper()
+        for line in content.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+        for t in line.split(",")
+        if t.strip()
+    ]
         ]
     print(f"📋 Universe: {len(tickers)} tickers — {', '.join(tickers)}")
     return tickers
