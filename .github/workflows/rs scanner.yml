@@ -25,7 +25,7 @@ jobs:
       - name: Write rs_bot.py
         run: |
           cat > rs_bot.py << 'PYEOF'
-          import os, time, requests, yfinance as yf, pytz
+          import os, time, requests, yfinance as yf, pytz, math
           from curl_cffi import requests as cffi_requests
           from datetime import datetime
 
@@ -104,6 +104,7 @@ jobs:
                   ret_12m = float((closes.iloc[-1] - closes.iloc[0]) / closes.iloc[0])
                   ret_6m  = float((closes.iloc[-1] - closes.iloc[-126]) / closes.iloc[-126]) if len(closes) >= 126 else ret_12m
                   ret_3m  = float((closes.iloc[-1] - closes.iloc[-66])  / closes.iloc[-66])  if len(closes) >= 66  else ret_12m
+                  if any(math.isnan(x) for x in [ret_12m, ret_6m, ret_3m]): return {'12m': 0, '6m': 0, '3m': 0}
                   return {'12m': ret_12m, '6m': ret_6m, '3m': ret_3m}
               except:
                   return {'12m': 0, '6m': 0, '3m': 0}
@@ -130,7 +131,8 @@ jobs:
                   ret_6m  = float((closes.iloc[-1] - closes.iloc[-126])/ closes.iloc[-126]) if len(closes) >= 126 else ret_12m
                   ret_3m  = float((closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66])
                   ret_1m  = float((closes.iloc[-1] - closes.iloc[-22]) / closes.iloc[-22]) if len(closes) >= 22 else 0
-
+                  if any(math.isnan(x) for x in [ret_12m, ret_6m, ret_3m, ret_1m]): return None
+                  
                   avg_vol  = volumes[-20:].mean() if len(volumes) >= 20 else volumes.mean()
                   avg_vol5 = volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
                   vol_surge = float(avg_vol5/avg_vol) if avg_vol > 0 else 0
