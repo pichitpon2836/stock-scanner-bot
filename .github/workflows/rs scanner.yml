@@ -119,12 +119,12 @@ jobs:
                   info = t.info
                   price = info.get('currentPrice') or info.get('regularMarketPrice')
                   if not price:
-                  print(ticker + ' skipped: no price in info (' + str(len(info)) + ' fields returned)')
-                  return None
+                      print(ticker + ' skipped: no price in info (' + str(len(info)) + ' fields returned)')
+                      return None
                   hist = t.history(period='1y')
                   if hist.empty or len(hist) < 66:
-                  print(ticker + ' skipped: insufficient history (' + str(len(hist)) + ' rows, need >=66)')
-                  return None
+                      print(ticker + ' skipped: insufficient history (' + str(len(hist)) + ' rows, need >=66)')
+                      return None
                   closes  = hist['Close']
                   volumes = hist['Volume']
                   atr     = calc_atr(hist)
@@ -139,8 +139,8 @@ jobs:
                   ret_3m  = float((closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66])
                   ret_1m  = float((closes.iloc[-1] - closes.iloc[-22]) / closes.iloc[-22]) if len(closes) >= 22 else 0
                   if any(math.isnan(x) for x in [ret_12m, ret_6m, ret_3m, ret_1m]):
-                  print(ticker + ' skipped: NaN in return calculation')
-                  return None
+                      print(ticker + ' skipped: NaN in return calculation')
+                      return None
                   
                   avg_vol  = volumes[-20:].mean() if len(volumes) >= 20 else volumes.mean()
                   avg_vol5 = volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
