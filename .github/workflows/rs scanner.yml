@@ -298,6 +298,7 @@ jobs:
                           'pct_from_high': d['pct_from_high'],
                           'atr_pct':       d['atr_pct'],
                           'unr':           d['unr'],
+                          'vol_today_ratio': d['vol_today_ratio'],
                           'signals':       ' / '.join(signals),
                           'sl':  sl,   'sl_pct':  round((sl-p)/p*100, 1),
                           'tp1': tp1,  'tp1_pct': round((tp1-p)/p*100, 1),
