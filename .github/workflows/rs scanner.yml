@@ -41,7 +41,7 @@ jobs:
               'Semiconductor Equipment': ['ONTO','FORM','AMKR','ACMR','KLIC','ICHR','UCTT'],
               'Analog Semiconductors':   ['ARM','TXN','ADI','MCHP','NXPI','ALAB','SWKS'],
               'AI Infrastructure':       ['NVDA','AVGO','SMCI','VRT','CRWV','APLD','COHR'],
-              'Grid Infrastructure':     ['GEV','ETN','NVT','PWR','ROPER','CARR'],
+              'Grid Infrastructure':     ['GEV','ETN','NVT','PWR','ROP','CARR'],
               'GPU Cloud & HPC':         ['CRWV','CORZ','APLD','CLSK','HIVE','BTBT'],
               'Connectivity Semi':       ['ALAB','KEYS','VIAV','LITE'],
               'Earth Observation':       ['PL','BKSY','SPIR','ASTS'],
@@ -104,9 +104,12 @@ jobs:
                   ret_12m = float((closes.iloc[-1] - closes.iloc[0]) / closes.iloc[0])
                   ret_6m  = float((closes.iloc[-1] - closes.iloc[-126]) / closes.iloc[-126]) if len(closes) >= 126 else ret_12m
                   ret_3m  = float((closes.iloc[-1] - closes.iloc[-66])  / closes.iloc[-66])  if len(closes) >= 66  else ret_12m
-                  if any(math.isnan(x) for x in [ret_12m, ret_6m, ret_3m]): return {'12m': 0, '6m': 0, '3m': 0}
+                  if any(math.isnan(x) for x in [ret_12m, ret_6m, ret_3m]):
+                  print('SPY skipped: NaN in return calculation')
+                  return {'12m': 0, '6m': 0, '3m': 0}
                   return {'12m': ret_12m, '6m': ret_6m, '3m': ret_3m}
-              except:
+                  except Exception as e:
+                  print('SPY error: ' + type(e).__name__ + ': ' + str(e))
                   return {'12m': 0, '6m': 0, '3m': 0}
 
           def fetch_stock(ticker):
@@ -115,9 +118,13 @@ jobs:
                   t = yf.Ticker(ticker, session=session)
                   info = t.info
                   price = info.get('currentPrice') or info.get('regularMarketPrice')
-                  if not price: return None
+                  if not price:
+                  print(ticker + ' skipped: no price in info (' + str(len(info)) + ' fields returned)')
+                  return None
                   hist = t.history(period='1y')
-                  if hist.empty or len(hist) < 66: return None
+                  if hist.empty or len(hist) < 66:
+                  print(ticker + ' skipped: insufficient history (' + str(len(hist)) + ' rows, need >=66)')
+                  return None
                   closes  = hist['Close']
                   volumes = hist['Volume']
                   atr     = calc_atr(hist)
@@ -131,7 +138,9 @@ jobs:
                   ret_6m  = float((closes.iloc[-1] - closes.iloc[-126])/ closes.iloc[-126]) if len(closes) >= 126 else ret_12m
                   ret_3m  = float((closes.iloc[-1] - closes.iloc[-66]) / closes.iloc[-66])
                   ret_1m  = float((closes.iloc[-1] - closes.iloc[-22]) / closes.iloc[-22]) if len(closes) >= 22 else 0
-                  if any(math.isnan(x) for x in [ret_12m, ret_6m, ret_3m, ret_1m]): return None
+                  if any(math.isnan(x) for x in [ret_12m, ret_6m, ret_3m, ret_1m]):
+                  print(ticker + ' skipped: NaN in return calculation')
+                  return None
                   
                   avg_vol  = volumes[-20:].mean() if len(volumes) >= 20 else volumes.mean()
                   avg_vol5 = volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
@@ -244,6 +253,9 @@ jobs:
                       stock_data[ticker] = d
                   print('  [' + str(i+1) + '/' + str(len(all_tickers)) + '] ' + ticker)
                   time.sleep(0.3)
+              failed = [t for t in all_tickers if t not in stock_data]
+              print('Fetch summary: ' + str(len(stock_data)) + '/' + str(len(all_tickers)) + ' succeeded, ' +
+              str(len(failed)) + ' failed' + (' -> ' + ', '.join(failed) if failed else ''))
 
               all_composites = [calc_composite_return(d) for d in stock_data.values()]
 
