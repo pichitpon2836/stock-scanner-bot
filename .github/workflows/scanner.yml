@@ -47,6 +47,14 @@ jobs:
               'APP','MELI','TTD','PUBM','DV',
               'APLD','CLSK','MARA','RIOT','ACMR','ONTO','FORM','ICHR',
               'CAVA','TOST','MNDY','BILL','IOT',
+              # เพิ่ม 15 ก.ค. 2026 — จาก RS Scanner universe (theme ที่ไม่ overlap เดิม)
+              # เพื่อเพิ่ม cross-check coverage จาก 17% -> ~45% ของ RS universe
+              'ALAB','ARM','DELL','INTC','MU','WDC','MRVL','STM','AEHR','SWKS','NXPI','MCHP',
+              'HWM','TOL','DHI','LEN','PHM','KBH',
+              'PANW','OKTA','FTNT','TENB','ZS',
+              'CNC','HUM','ELV','MOH','ALHC',
+              'GEV','ETN','NVT','PWR','CEG',
+              'LITE','VIAV',
           ]
           WATCHLIST = list(dict.fromkeys(WATCHLIST))
 
