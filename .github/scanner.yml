@@ -1,0 +1,356 @@
+name: VI Stock Scanner Daily
+
+on:
+  schedule:
+    # 17:30 Bangkok = 10:30 UTC
+    - cron: '30 10 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write scanner_bot.py
+        run: |
+          cat > scanner_bot.py << 'PYEOF'
+          import os, time, requests, yfinance as yf, pytz
+          from curl_cffi import requests as cffi_requests
+          from datetime import datetime
+
+          BOT_TOKEN = os.environ['TELEGRAM_BOT_TOKEN']
+          CHAT_ID   = os.environ['TELEGRAM_CHAT_ID']
+          TIMEZONE  = 'Asia/Bangkok'
+          TOP_N     = 3
+
+          WATCHLIST = [
+              'AAPL','MSFT','NVDA','AMZN','GOOGL','META','BRK-B','LLY','AVGO',
+              'WMT','JPM','V','UNH','XOM','ORCL','MA','COST','HD','PG',
+              'JNJ','ABBV','BAC','KO','MRK','CVX','CRM','NFLX','AMD',
+              'TMO','ACN','MCD','ADBE','GE','IBM','TXN','ISRG','INTU',
+              'QCOM','LOW','SPGI','GS','MS','BLK','SYK','AMAT',
+              'GILD','MDT','ADI','VRTX','MMC','AMT','CI','TJX','BSX','REGN',
+              'SMCI','COHR','VRT','GTLB','PATH','DDOG','SNOW','NET','CRWD',
+              'AXON','ENPH','FSLR','CELH','DUOL',
+              'APP','MELI','TTD','PUBM','DV',
+              'APLD','CLSK','MARA','RIOT','ACMR','ONTO','FORM','ICHR',
+              'CAVA','TOST','MNDY','BILL','IOT',
+              # เพิ่ม 15 ก.ค. 2026 — จาก RS Scanner universe (theme ที่ไม่ overlap เดิม)
+              # เพื่อเพิ่ม cross-check coverage จาก 17% -> ~45% ของ RS universe
+              'ALAB','ARM','DELL','INTC','MU','WDC','MRVL','STM','AEHR','SWKS','NXPI','MCHP',
+              'HWM','TOL','DHI','LEN','PHM','KBH',
+              'PANW','OKTA','FTNT','TENB','ZS',
+              'CNC','HUM','ELV','MOH','ALHC',
+              'GEV','ETN','NVT','PWR','CEG',
+              'LITE','VIAV',
+          ]
+          WATCHLIST = list(dict.fromkeys(WATCHLIST))
+
+          def send(text):
+              if len(text) > 4000: text = text[:3990] + '...'
+              try:
+                  r = requests.post(
+                      'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                      json={'chat_id': CHAT_ID, 'text': text, 'parse_mode': 'HTML'},
+                      timeout=15,
+                  )
+                  if r.status_code != 200:
+                      plain = (text
+                          .replace('<b>','').replace('</b>','')
+                          .replace('<i>','').replace('</i>','')
+                      )
+                      requests.post(
+                          'https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage',
+                          json={'chat_id': CHAT_ID, 'text': plain},
+                          timeout=15,
+                      )
+              except Exception as e:
+                  print('Telegram error: ' + str(e))
+              time.sleep(0.5)
+
+          def calc_atr(hist, period=14):
+              if hist.empty or len(hist) < 2: return 0
+              highs  = hist['High'].values
+              lows   = hist['Low'].values
+              closes = hist['Close'].values
+              trs = []
+              for i in range(1, min(period+1, len(closes))):
+                  tr = max(highs[-i]-lows[-i], abs(highs[-i]-closes[-i-1]), abs(lows[-i]-closes[-i-1]))
+                  trs.append(tr)
+              return sum(trs)/len(trs) if trs else 0
+
+          def fmt_levels(price, atr, include_sltp=True, sl_mult=2.0, tp1_mult=2.0):
+              line = 'Buy: $' + str(round(price,2)) + ' | ATR: ' + str(round(atr/price*100,1)) + '%'
+              if include_sltp:
+                  sl  = round(price - sl_mult * atr, 2)
+                  tp1 = round(price + tp1_mult * atr, 2)
+                  def pct(x): return str(round((x-price)/price*100, 1)) + '%'
+                  line += (
+                      '\nSL:  $' + str(sl)  + ' (' + pct(sl)  + ')\n'
+                      'TP1: $' + str(tp1) + ' (+' + pct(tp1) + ')'
+                  )
+              return line
+
+          def fetch(ticker):
+              try:
+                  session = cffi_requests.Session(impersonate='chrome')
+                  t = yf.Ticker(ticker, session=session)
+                  info = t.info
+                  price = info.get('currentPrice') or info.get('regularMarketPrice')
+                  if not price:
+                      print(ticker + ' skipped: no price in info (' + str(len(info)) + ' fields returned)')
+                      return None
+                  hist = t.history(period='1y')
+                  if hist.empty or len(hist) < 20:
+                      print(ticker + ' skipped: insufficient history (' + str(len(hist)) + ' rows, need >=20)')
+                      return None
+                  closes  = hist['Close'].dropna()
+                  volumes = hist['Volume'].dropna()
+                  atr    = calc_atr(hist.dropna())
+                  ma50   = closes[-50:].mean() if len(closes) >= 50 else closes.mean()
+                  ma200  = closes[-200:].mean() if len(closes) >= 200 else closes.mean()
+                  high52 = closes.max()
+                  avg_vol_20 = volumes[-20:].mean() if len(volumes) >= 20 else volumes.mean()
+                  avg_vol_5  = volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
+                  ret_1m = (closes.iloc[-1]-closes.iloc[-22])/closes.iloc[-22] if len(closes)>=22 else 0
+                  ret_3m = (closes.iloc[-1]-closes.iloc[-66])/closes.iloc[-66] if len(closes)>=66 else 0
+                  return {
+                      'ticker': ticker, 'name': info.get('shortName', ticker),
+                      'price': float(price), 'atr': atr,
+                      'eps_fwd': info.get('forwardEps'), 'eps_ttm': info.get('trailingEps'),
+                      'growth': info.get('earningsGrowth') or info.get('revenueGrowth'),
+                      'rev_growth': info.get('revenueGrowth'),
+                      'fcf': info.get('freeCashflow'), 'shares': info.get('sharesOutstanding'),
+                      'roe': info.get('returnOnEquity'), 'roic': info.get('returnOnAssets'),
+                      'net_margin': info.get('profitMargins'), 'gross_margin': info.get('grossMargins'),
+                      'peg': info.get('pegRatio'),
+                      'pe': info.get('forwardPE') or info.get('trailingPE'),
+                      'pb': info.get('priceToBook'),
+                      'insider_pct': info.get('heldPercentInsiders'),
+                      'short_pct': info.get('shortPercentOfFloat') or 0,
+                      'target_price': info.get('targetMeanPrice'),
+                      'eps_growth': info.get('earningsGrowth') or 0,
+                      'desc': (info.get('longBusinessSummary') or '')[:120],
+                      'ma50': float(ma50), 'ma200': float(ma200),
+                      'high52': float(high52),
+                      'vol_surge': float(avg_vol_5/avg_vol_20) if avg_vol_20 > 0 else 0,
+                      'pct_from_high': (float(high52)-float(price))/float(high52) if high52 > 0 else 1,
+                      'ret_1m': float(ret_1m), 'ret_3m': float(ret_3m),
+                  }
+              except Exception as e:
+                  print(ticker + ' error: ' + str(e))
+                  return None
+
+          def qscore(d):
+              s = 0
+              if d['roe'] and d['roe'] >= 0.15: s += 25
+              if d['net_margin'] and d['net_margin'] >= 0.15: s += 25
+              if d['gross_margin'] and d['gross_margin'] >= 0.40: s += 25
+              if d['rev_growth'] and d['rev_growth'] >= 0.10: s += 25
+              return s
+
+          def make_row(d, fair, buy, gap, metrics):
+              return {
+                  'ticker': d['ticker'], 'name': d['name'], 'score': qscore(d),
+                  'status': 'BUY ZONE' if d['price'] <= buy else 'WATCH',
+                  'price': d['price'], 'atr': d['atr'], 'fair': fair, 'buy': buy,
+                  'disc': (d['price']-fair)/fair*100, 'metrics': metrics,
+                  'desc': d['desc'], 'gap': gap,
+                  'target_price': d.get('target_price'),
+              }
+
+          def buffett(d):
+              if d['price'] <= d['ma50']: return None
+              eps = d['eps_fwd']
+              if not eps or eps <= 0: return None
+              fair = eps * 22; buy = fair * 0.85
+              gap = (d['price']-buy)/buy
+              if gap > 0.10: return None
+              m = []
+              if d['roe']: m.append('ROE ' + str(round(d['roe']*100)) + '%')
+              if d['net_margin']: m.append('NM ' + str(round(d['net_margin']*100)) + '%')
+              if d['gross_margin']: m.append('GM ' + str(round(d['gross_margin']*100)) + '%')
+              return make_row(d, fair, buy, gap, ' / '.join(m))
+
+          def lynch(d):
+              if d['price'] <= d['ma50']: return None
+              eps = d['eps_ttm'] or d['eps_fwd']
+              growth = d['growth']
+              if not eps or eps <= 0 or not growth or growth <= 0: return None
+              gp = min(growth * 100, 30)
+              fair = eps * gp; buy = fair * 0.95
+              gap = (d['price']-buy)/buy
+              if gap > 0.10: return None
+              peg = ('PEG ' + str(round(d['peg'],2))) if d['peg'] else ('PEG ~' + str(round(d['price']/fair,2)))
+              m = [peg, 'EPS +' + str(round(growth*100)) + '%']
+              if d['rev_growth']: m.append('Rev +' + str(round(d['rev_growth']*100)) + '%')
+              return make_row(d, fair, buy, gap, ' / '.join(m))
+
+          def sleep_scan(d):
+              if d['price'] <= d['ma50']: return None
+              if not d['fcf'] or not d['shares'] or d['shares'] <= 0: return None
+              fcf_ps = d['fcf']/d['shares']
+              if fcf_ps <= 0: return None
+              fair = fcf_ps/0.04; buy = fair*0.90
+              gap = (d['price']-buy)/buy
+              if gap > 0.10: return None
+              m = []
+              if d['rev_growth']: m.append('Rev +' + str(round(d['rev_growth']*100)) + '%')
+              if d['roe']: m.append('ROE ' + str(round(d['roe']*100)) + '%')
+              if d['insider_pct']: m.append('Insider ' + str(round(d['insider_pct']*100,1)) + '%')
+              return make_row(d, fair, buy, gap, ' / '.join(m))
+
+          def minervini(d):
+              p = d['price']
+              if p <= d['ma50'] or p <= d['ma200'] or d['ma50'] <= d['ma200']: return None
+              pfh = d['pct_from_high']
+              if pfh > 0.30 or d['eps_growth'] < 0.10: return None
+              sc = 0
+              if pfh <= 0.15: sc += 25
+              elif pfh <= 0.25: sc += 15
+              if d['vol_surge'] >= 1.2: sc += 25
+              elif d['vol_surge'] >= 1.0: sc += 15
+              sc += 25; sc += 25
+              m = ['MA50>MA200', str(round(pfh*100)) + '% from High',
+                   'EPS +' + str(round(d['eps_growth']*100)) + '%',
+                   'VolSurge ' + str(round(d['vol_surge'],1)) + 'x']
+              return {
+                  'ticker': d['ticker'], 'name': d['name'], 'score': sc, 'price': p,
+                  'atr': d['atr'], 'ma50': d['ma50'], 'ma200': d['ma200'], 'high52': d['high52'],
+                  'metrics': ' / '.join(m), 'desc': d['desc'], 'pct_from_high': pfh,
+                  'ret_1m': d['ret_1m'], 'ret_3m': d['ret_3m'],
+              }
+
+          def rerate(d):
+              if d['price'] <= d['ma50']: return None
+              score = 0; signals = []
+              p = d['price']; pe = d['pe']; pb = d['pb']
+              roic = d['roic']; insider = d['insider_pct']
+              short_pct = d['short_pct']; target = d['target_price']
+              if pe and 0 < pe < 25: score += 20; signals.append('PE ' + str(round(pe,1)))
+              if pb and pb < 5: score += 10; signals.append('PB ' + str(round(pb,1)))
+              if roic and roic >= 0.08: score += 20; signals.append('ROIC ' + str(round(roic*100)) + '%')
+              if insider and insider >= 0.03: score += 20; signals.append('Insider ' + str(round(insider*100,1)) + '%')
+              if short_pct and short_pct >= 0.03: score += 10; signals.append('Short ' + str(round(short_pct*100,1)) + '%')
+              if target and p > 0 and (target-p)/p >= 0.10: score += 20; signals.append('Target +' + str(round((target-p)/p*100)) + '%')
+              if score < 35: return None
+              upside = ((target-p)/p*100) if target and p > 0 else 0
+              return {
+                  'ticker': d['ticker'], 'name': d['name'], 'score': score,
+                  'price': p, 'atr': d['atr'], 'upside': upside,
+                  'metrics': ' / '.join(signals), 'desc': d['desc'],
+              }
+
+          def fmt(rank, s, prefix=''):
+              emoji = 'BUY ZONE' if 'BUY' in s['status'] else 'WATCH'
+              lv = fmt_levels(s['price'], s['atr'], include_sltp=(s['status'] == 'BUY ZONE'))
+              fair_line = '  Fair: $' + str(round(s['fair'],2)) + ' (' + str(round(s['disc'])) + '%)'
+              tp = s.get('target_price')
+              if tp:
+                  tp_diff = (s['fair'] - tp) / tp * 100 if tp else 0
+                  fair_line += ' | Analyst: $' + str(round(tp,2))
+                  if abs(tp_diff) >= 50:
+                      fair_line += ' ⚠️ ต่างกันมาก เช็ค consensus เพิ่ม'
+              lines = ['',
+                  '#' + str(rank) + ' ' + prefix + s['ticker'] + ' - ' + s['name'],
+                  '  Quality: ' + str(s['score']) + '/100 | ' + emoji,
+                  fair_line,
+                  '  ' + lv.replace('\n', '\n  '),
+                  '  ' + s['metrics']]
+              if s['desc']: lines.append('  ' + s['desc'])
+              return '\n'.join(lines)
+
+          def fmt_mini(rank, s):
+              lv = fmt_levels(s['price'], s['atr'])
+              lines = ['',
+                  '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
+                  '  SEPA: ' + str(s['score']) + '/100 | MA50: $' + str(round(s['ma50'],2)) + ' | 52W High: $' + str(round(s['high52'],2)),
+                  '  1M: +' + str(round(s['ret_1m']*100,1)) + '% | 3M: +' + str(round(s['ret_3m']*100,1)) + '%',
+                  '  ' + lv.replace('\n', '\n  '),
+                  '  ' + s['metrics']]
+              if s['desc']: lines.append('  ' + s['desc'])
+              return '\n'.join(lines)
+
+          def fmt_rerate(rank, s):
+              upside_str = ('+' + str(round(s['upside'])) + '% to target') if s['upside'] > 0 else ''
+              lv = fmt_levels(s['price'], s['atr'])
+              lines = ['',
+                  '#' + str(rank) + ' ' + s['ticker'] + ' - ' + s['name'],
+                  '  Re-rating: ' + str(s['score']) + '/100' + (' | ' + upside_str if upside_str else ''),
+                  '  ' + lv.replace('\n', '\n  '),
+                  '  ' + s['metrics']]
+              if s['desc']: lines.append('  ' + s['desc'])
+              return '\n'.join(lines)
+
+          def main():
+              today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
+              print('Scanning ' + str(len(WATCHLIST)) + ' tickers...')
+              buf, lyn, slp, mini, rr = [], [], [], [], []
+              fetched = 0
+              failed_tickers = []
+              for ticker in WATCHLIST:
+                  d = fetch(ticker)
+                  if not d:
+                      failed_tickers.append(ticker)
+                      continue
+                  fetched += 1
+                  r = buffett(d)
+                  if r: buf.append(r)
+                  r = lynch(d)
+                  if r: lyn.append(r)
+                  r = sleep_scan(d)
+                  if r: slp.append(r)
+                  r = minervini(d)
+                  if r: mini.append(r)
+                  r = rerate(d)
+                  if r: rr.append(r)
+                  time.sleep(0.3)
+              print('Fetch summary: ' + str(fetched) + '/' + str(len(WATCHLIST)) + ' succeeded, ' +
+                    str(len(failed_tickers)) + ' failed' + (' -> ' + ', '.join(failed_tickers) if failed_tickers else ''))
+              key = lambda x: (x['gap'], -x['score'])
+              buf.sort(key=key); lyn.sort(key=key); slp.sort(key=key)
+              mini.sort(key=lambda x: (-x['score'], x['pct_from_high']))
+              rr.sort(key=lambda x: (-x['score'], -x['upside']))
+              send('<b>Daily Scan - ' + today + '</b>\nBUY ZONE / WATCH / SEPA / RE-RATING\nSL/TP based on ATR 14d per stock\nScanned ' + str(len(WATCHLIST)) + ' stocks')
+              if buf:
+                  send('<b>WARREN BUFFETT Style</b>\n(Fair=EPS x 22 / Buy=Fair x 0.85 / SL=2xATR / TP1=2xATR (แสดงเมื่อเข้า BUY ZONE เท่านั้น))' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
+              else:
+                  send('<b>WARREN BUFFETT Style</b>\nNo stocks today.')
+              if lyn:
+                  send('<b>PETER LYNCH Style</b>\n(Fair=EPS x Growth / Buy=Fair x 0.95 / SL=2xATR / TP1=2xATR (แสดงเมื่อเข้า BUY ZONE เท่านั้น))' + ''.join(fmt(i+1, s, 'Fast Grower: ') for i, s in enumerate(lyn[:TOP_N])))
+              else:
+                  send('<b>PETER LYNCH Style</b>\nNo stocks today.')
+              if slp:
+                  send('<b>NICK SLEEP Style</b>\n(Fair=FCF/0.04 / Buy=Fair x 0.90 / SL=2xATR / TP1=2xATR (แสดงเมื่อเข้า BUY ZONE เท่านั้น))' + ''.join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N])))
+              else:
+                  send('<b>NICK SLEEP Style</b>\nNo stocks today.')
+              if mini:
+                  send('<b>MINERVINI SEPA Style</b>\n(Price>MA50>MA200 / SL=2xATR / TP1=2xATR)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
+              else:
+                  send('<b>MINERVINI SEPA Style</b>\nNo stocks today.')
+              if rr:
+                  send('<b>RE-RATING Scanner</b>\n(Low PE/PB + ROIC + Insider / SL=2xATR / TP1=2xATR)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
+              else:
+                  send('<b>RE-RATING Scanner</b>\nNo stocks today.')
+              print('Done.')
+
+          main()
+          PYEOF
+
+      - name: Run VI scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scanner_bot.py
