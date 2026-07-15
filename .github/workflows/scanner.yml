@@ -83,19 +83,17 @@ jobs:
                   trs.append(tr)
               return sum(trs)/len(trs) if trs else 0
 
-          def fmt_levels(price, atr, sl_mult=2.0, tp_mults=(2.0,4.0,8.0)):
-              sl  = round(price - sl_mult * atr, 2)
-              tp1 = round(price + tp_mults[0] * atr, 2)
-              tp2 = round(price + tp_mults[1] * atr, 2)
-              tp3 = round(price + tp_mults[2] * atr, 2)
-              def pct(x): return str(round((x-price)/price*100, 1)) + '%'
-              return (
-                  'Buy: $' + str(round(price,2)) + ' | ATR: ' + str(round(atr/price*100,1)) + '%\n'
-                  'SL:  $' + str(sl)  + ' (' + pct(sl)  + ')\n'
-                  'TP1: $' + str(tp1) + ' (+' + pct(tp1) + ') | '
-                  'TP2: $' + str(tp2) + ' (+' + pct(tp2) + ') | '
-                  'TP3: $' + str(tp3) + ' (+' + pct(tp3) + ')'
-              )
+          def fmt_levels(price, atr, include_sltp=True, sl_mult=2.0, tp1_mult=2.0):
+              line = 'Buy: $' + str(round(price,2)) + ' | ATR: ' + str(round(atr/price*100,1)) + '%'
+              if include_sltp:
+                  sl  = round(price - sl_mult * atr, 2)
+                  tp1 = round(price + tp1_mult * atr, 2)
+                  def pct(x): return str(round((x-price)/price*100, 1)) + '%'
+                  line += (
+                      '\nSL:  $' + str(sl)  + ' (' + pct(sl)  + ')\n'
+                      'TP1: $' + str(tp1) + ' (+' + pct(tp1) + ')'
+                  )
+              return line
 
           def fetch(ticker):
               try:
@@ -103,12 +101,16 @@ jobs:
                   t = yf.Ticker(ticker, session=session)
                   info = t.info
                   price = info.get('currentPrice') or info.get('regularMarketPrice')
-                  if not price: return None
+                  if not price:
+                      print(ticker + ' skipped: no price in info (' + str(len(info)) + ' fields returned)')
+                      return None
                   hist = t.history(period='1y')
-                  if hist.empty or len(hist) < 20: return None
-                  closes  = hist['Close']
-                  volumes = hist['Volume']
-                  atr    = calc_atr(hist)
+                  if hist.empty or len(hist) < 20:
+                      print(ticker + ' skipped: insufficient history (' + str(len(hist)) + ' rows, need >=20)')
+                      return None
+                  closes  = hist['Close'].dropna()
+                  volumes = hist['Volume'].dropna()
+                  atr    = calc_atr(hist.dropna())
                   ma50   = closes[-50:].mean() if len(closes) >= 50 else closes.mean()
                   ma200  = closes[-200:].mean() if len(closes) >= 200 else closes.mean()
                   high52 = closes.max()
@@ -245,7 +247,7 @@ jobs:
 
           def fmt(rank, s, prefix=''):
               emoji = 'BUY ZONE' if 'BUY' in s['status'] else 'WATCH'
-              lv = fmt_levels(s['price'], s['atr'])
+              lv = fmt_levels(s['price'], s['atr'], include_sltp=(s['status'] == 'BUY ZONE'))
               fair_line = '  Fair: $' + str(round(s['fair'],2)) + ' (' + str(round(s['disc'])) + '%)'
               tp = s.get('target_price')
               if tp:
@@ -288,9 +290,14 @@ jobs:
               today = datetime.now(pytz.timezone(TIMEZONE)).strftime('%d %b %Y')
               print('Scanning ' + str(len(WATCHLIST)) + ' tickers...')
               buf, lyn, slp, mini, rr = [], [], [], [], []
+              fetched = 0
+              failed_tickers = []
               for ticker in WATCHLIST:
                   d = fetch(ticker)
-                  if not d: continue
+                  if not d:
+                      failed_tickers.append(ticker)
+                      continue
+                  fetched += 1
                   r = buffett(d)
                   if r: buf.append(r)
                   r = lynch(d)
@@ -302,29 +309,31 @@ jobs:
                   r = rerate(d)
                   if r: rr.append(r)
                   time.sleep(0.3)
+              print('Fetch summary: ' + str(fetched) + '/' + str(len(WATCHLIST)) + ' succeeded, ' +
+                    str(len(failed_tickers)) + ' failed' + (' -> ' + ', '.join(failed_tickers) if failed_tickers else ''))
               key = lambda x: (x['gap'], -x['score'])
               buf.sort(key=key); lyn.sort(key=key); slp.sort(key=key)
               mini.sort(key=lambda x: (-x['score'], x['pct_from_high']))
               rr.sort(key=lambda x: (-x['score'], -x['upside']))
               send('<b>Daily Scan - ' + today + '</b>\nBUY ZONE / WATCH / SEPA / RE-RATING\nSL/TP based on ATR 14d per stock\nScanned ' + str(len(WATCHLIST)) + ' stocks')
               if buf:
-                  send('<b>WARREN BUFFETT Style</b>\n(Fair=EPS x 22 / Buy=Fair x 0.85 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
+                  send('<b>WARREN BUFFETT Style</b>\n(Fair=EPS x 22 / Buy=Fair x 0.85 / SL=2xATR / TP1=2xATR (แสดงเมื่อเข้า BUY ZONE เท่านั้น))' + ''.join(fmt(i+1, s) for i, s in enumerate(buf[:TOP_N])))
               else:
                   send('<b>WARREN BUFFETT Style</b>\nNo stocks today.')
               if lyn:
-                  send('<b>PETER LYNCH Style</b>\n(Fair=EPS x Growth / Buy=Fair x 0.95 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s, 'Fast Grower: ') for i, s in enumerate(lyn[:TOP_N])))
+                  send('<b>PETER LYNCH Style</b>\n(Fair=EPS x Growth / Buy=Fair x 0.95 / SL=2xATR / TP1=2xATR (แสดงเมื่อเข้า BUY ZONE เท่านั้น))' + ''.join(fmt(i+1, s, 'Fast Grower: ') for i, s in enumerate(lyn[:TOP_N])))
               else:
                   send('<b>PETER LYNCH Style</b>\nNo stocks today.')
               if slp:
-                  send('<b>NICK SLEEP Style</b>\n(Fair=FCF/0.04 / Buy=Fair x 0.90 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N])))
+                  send('<b>NICK SLEEP Style</b>\n(Fair=FCF/0.04 / Buy=Fair x 0.90 / SL=2xATR / TP1=2xATR (แสดงเมื่อเข้า BUY ZONE เท่านั้น))' + ''.join(fmt(i+1, s) for i, s in enumerate(slp[:TOP_N])))
               else:
                   send('<b>NICK SLEEP Style</b>\nNo stocks today.')
               if mini:
-                  send('<b>MINERVINI SEPA Style</b>\n(Price>MA50>MA200 / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
+                  send('<b>MINERVINI SEPA Style</b>\n(Price>MA50>MA200 / SL=2xATR / TP1=2xATR)' + ''.join(fmt_mini(i+1, s) for i, s in enumerate(mini[:TOP_N])))
               else:
                   send('<b>MINERVINI SEPA Style</b>\nNo stocks today.')
               if rr:
-                  send('<b>RE-RATING Scanner</b>\n(Low PE/PB + ROIC + Insider / SL=2xATR / TP=2/4/8xATR)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
+                  send('<b>RE-RATING Scanner</b>\n(Low PE/PB + ROIC + Insider / SL=2xATR / TP1=2xATR)' + ''.join(fmt_rerate(i+1, s) for i, s in enumerate(rr[:TOP_N])))
               else:
                   send('<b>RE-RATING Scanner</b>\nNo stocks today.')
               print('Done.')
