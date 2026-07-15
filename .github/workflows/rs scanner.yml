@@ -314,9 +314,9 @@ jobs:
               )
 
               # LEADING THEMES — แสดงเสมอ ไม่ขึ้นกับ RS filter
-              theme_msg = '<b>LEADING THEMES (Top 5 = checklist item 2)</b>\n'
+              theme_msg = '<b>LEADING THEMES (Top 7 = checklist item 2)</b>\n'
               for i, (theme, rs) in enumerate(sorted_themes[:22]):
-                  flag  = '✅ TOP5' if i < 5 else ''
+                  flag  = '✅ TOP7' if i < 7 else ''
                   emoji = '🔥' if rs >= 85 else ('♨️' if rs >= 70 else '❄️')
                   has_setup = '📋' if theme in theme_results else ''
                   theme_msg += (str(i+1) + '. ' + theme +
@@ -324,8 +324,8 @@ jobs:
                                 ' ' + flag + ' ' + has_setup + '\n')
               send(theme_msg)
 
-              # TOP SETUPS — เฉพาะ theme ที่ติด top 5 และมี setup RS >= 70
-              top_themes = [t for t, _ in sorted_themes[:5]]
+              # TOP SETUPS — เฉพาะ theme ที่ติด top 7 และมี setup RS >= 70
+              top_themes = [t for t, _ in sorted_themes[:7]]
               for theme in top_themes:
                   if theme not in theme_results:
                       # แจ้งว่าไม่มี setup แทนที่จะ skip เงียบๆ
