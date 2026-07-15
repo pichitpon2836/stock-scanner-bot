@@ -136,6 +136,7 @@ jobs:
                   avg_vol  = volumes[-20:].mean() if len(volumes) >= 20 else volumes.mean()
                   avg_vol5 = volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
                   vol_surge = float(avg_vol5/avg_vol) if avg_vol > 0 else 0
+                  vol_today_ratio = float(volumes.iloc[-1]/avg_vol) if avg_vol > 0 else 0
 
                   pct_from_ma21 = float((price - float(ma21)) / float(ma21))
                   pct_from_high = float((float(high52) - price) / float(high52))
@@ -167,6 +168,7 @@ jobs:
                       'ret_3m':        ret_3m,
                       'ret_1m':        ret_1m,
                       'vol_surge':     vol_surge,
+                      'vol_today_ratio': vol_today_ratio,
                       'pct_from_ma21': pct_from_ma21,
                       'pct_from_high': pct_from_high,
                       'pct_from_low':  pct_from_low,
@@ -354,7 +356,8 @@ jobs:
                           'TP1: $' + str(s['tp1']) + ' (+' + str(s['tp1_pct']) + '%)\n'
                           'TP2: $' + str(s['tp2']) + ' (+' + str(s['tp2_pct']) + '%)\n'
                           'TP3: $' + str(s['tp3']) + ' (+' + str(s['tp3_pct']) + '%)\n'
-                          + s['signals']
+                          + s['signals'] +
+                          '\nVolume: ' + str(round(s['vol_today_ratio'],2)) + 'x MA20 ' + ('✅ PASS' if s['vol_today_ratio'] >= 1.5 else '❌')
                       )
                   send(msg)
 
