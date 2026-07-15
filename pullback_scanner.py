@@ -156,10 +156,6 @@ def is_pullback_setup(d: dict) -> bool:
     if d["ma200"] and d["ma50"] <= d["ma200"]:
         return False
 
-    # 4. ATR ≤ 10%
-    if d["atr_pct"] > 10:
-        return False
-
     return True
 
 
