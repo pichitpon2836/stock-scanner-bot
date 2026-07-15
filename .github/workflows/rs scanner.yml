@@ -356,6 +356,11 @@ jobs:
                       sign     = '+' if float(ma21_str) >= 0 else ''
                       pass_tag = '✅' if s['rs'] >= RS_PASS else '👀'
                       unr_tag  = ' 🎁UnR' if s['unr'] else ''
+                      vol_pass = s['vol_today_ratio'] >= 1.5
+                      sltp_lines = (
+                          'SL:  $' + str(s['sl'])  + ' (' + str(s['sl_pct'])  + '%)\n'
+                          'TP1: $' + str(s['tp1']) + ' (+' + str(s['tp1_pct']) + '%)\n'
+                      ) if vol_pass else ''
                       msg += (
                           '\n' + pass_tag + ' #' + str(i+1) + ' ' + s['ticker'] +
                           ' RS:' + str(s['rs']) + ' Score:' + str(s['score']) + unr_tag + '\n'
@@ -364,13 +369,9 @@ jobs:
                           ' | ATR:' + str(round(s['atr_pct'],1)) + '%\n'
                           '12M:+' + str(round(s['ret_12m']*100)) + '%' +
                           ' | 3M:+' + str(round(s['ret_3m']*100)) + '%\n'
-                          'Buy: $' + str(round(s['price'],2)) + '\n'
-                          'SL:  $' + str(s['sl'])  + ' (' + str(s['sl_pct'])  + '%)\n'
-                          'TP1: $' + str(s['tp1']) + ' (+' + str(s['tp1_pct']) + '%)\n'
-                          'TP2: $' + str(s['tp2']) + ' (+' + str(s['tp2_pct']) + '%)\n'
-                          'TP3: $' + str(s['tp3']) + ' (+' + str(s['tp3_pct']) + '%)\n'
+                          + sltp_lines
                           + s['signals'] +
-                          '\nVolume: ' + str(round(s['vol_today_ratio'],2)) + 'x MA20 ' + ('✅ PASS' if s['vol_today_ratio'] >= 1.5 else '❌')
+                          '\nVolume: ' + str(round(s['vol_today_ratio'],2)) + 'x MA20 ' + ('✅ PASS' if vol_pass else '❌')
                       )
                   send(msg)
 
