@@ -100,7 +100,7 @@ jobs:
                   session = cffi_requests.Session(impersonate='chrome')
                   hist = yf.Ticker(BENCHMARK, session=session).history(period='1y')
                   if hist.empty: return {'12m': 0, '6m': 0, '3m': 0}
-                  closes = hist['Close']
+                  closes = hist['Close'].dropna()
                   ret_12m = float((closes.iloc[-1] - closes.iloc[0]) / closes.iloc[0])
                   ret_6m  = float((closes.iloc[-1] - closes.iloc[-126]) / closes.iloc[-126]) if len(closes) >= 126 else ret_12m
                   ret_3m  = float((closes.iloc[-1] - closes.iloc[-66])  / closes.iloc[-66])  if len(closes) >= 66  else ret_12m
@@ -125,8 +125,8 @@ jobs:
                   if hist.empty or len(hist) < 66:
                       print(ticker + ' skipped: insufficient history (' + str(len(hist)) + ' rows, need >=66)')
                       return None
-                  closes  = hist['Close']
-                  volumes = hist['Volume']
+                  closes  = hist['Close'].dropna()
+                  volumes = hist['Volume'].dropna()
                   atr     = calc_atr(hist)
                   ma21    = closes[-21:].mean()
                   ma50    = closes[-50:].mean() if len(closes) >= 50 else closes.mean()
