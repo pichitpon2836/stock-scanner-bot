@@ -127,7 +127,7 @@ jobs:
                       return None
                   closes  = hist['Close'].dropna()
                   volumes = hist['Volume'].dropna()
-                  atr     = calc_atr(hist)
+                  atr     = calc_atr(hist.dropna())
                   ma21    = closes[-21:].mean()
                   ma50    = closes[-50:].mean() if len(closes) >= 50 else closes.mean()
                   ma200   = closes[-200:].mean() if len(closes) >= 200 else closes.mean()
