@@ -105,10 +105,10 @@ jobs:
                   ret_6m  = float((closes.iloc[-1] - closes.iloc[-126]) / closes.iloc[-126]) if len(closes) >= 126 else ret_12m
                   ret_3m  = float((closes.iloc[-1] - closes.iloc[-66])  / closes.iloc[-66])  if len(closes) >= 66  else ret_12m
                   if any(math.isnan(x) for x in [ret_12m, ret_6m, ret_3m]):
-                  print('SPY skipped: NaN in return calculation')
-                  return {'12m': 0, '6m': 0, '3m': 0}
+                    print('SPY skipped: NaN in return calculation')
+                    return {'12m': 0, '6m': 0, '3m': 0}
                   return {'12m': ret_12m, '6m': ret_6m, '3m': ret_3m}
-                  except Exception as e:
+              except Exception as e:
                   print('SPY error: ' + type(e).__name__ + ': ' + str(e))
                   return {'12m': 0, '6m': 0, '3m': 0}
 
