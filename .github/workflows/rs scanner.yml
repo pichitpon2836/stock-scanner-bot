@@ -146,6 +146,7 @@ jobs:
                   avg_vol5 = volumes[-5:].mean()  if len(volumes) >= 5  else volumes.mean()
                   vol_surge = float(avg_vol5/avg_vol) if avg_vol > 0 else 0
                   vol_today_ratio = float(volumes.iloc[-1]/avg_vol) if avg_vol > 0 else 0
+                  price_up_today = bool(closes.iloc[-1] > closes.iloc[-2]) if len(closes) >= 2 else False
 
                   pct_from_ma21 = float((price - float(ma21)) / float(ma21))
                   pct_from_high = float((float(high52) - price) / float(high52))
@@ -178,6 +179,7 @@ jobs:
                       'ret_1m':        ret_1m,
                       'vol_surge':     vol_surge,
                       'vol_today_ratio': vol_today_ratio,
+                      'price_up_today': price_up_today,
                       'pct_from_ma21': pct_from_ma21,
                       'pct_from_high': pct_from_high,
                       'pct_from_low':  pct_from_low,
@@ -311,6 +313,7 @@ jobs:
                           'atr_pct':       d['atr_pct'],
                           'unr':           d['unr'],
                           'vol_today_ratio': d['vol_today_ratio'],
+                          'price_up_today': d['price_up_today'],
                           'signals':       ' / '.join(signals),
                           'sl':  sl,   'sl_pct':  round((sl-p)/p*100, 1),
                           'tp1': tp1,  'tp1_pct': round((tp1-p)/p*100, 1),
@@ -356,7 +359,7 @@ jobs:
                       sign     = '+' if float(ma21_str) >= 0 else ''
                       pass_tag = '✅' if s['rs'] >= RS_PASS else '👀'
                       unr_tag  = ' 🎁UnR' if s['unr'] else ''
-                      vol_pass = s['vol_today_ratio'] >= 1.5
+                      vol_pass = s['vol_today_ratio'] >= 1.5 and s['price_up_today']
                       sltp_lines = (
                           'SL:  $' + str(s['sl'])  + ' (' + str(s['sl_pct'])  + '%)\n'
                           'TP1: $' + str(s['tp1']) + ' (+' + str(s['tp1_pct']) + '%)\n'
@@ -371,7 +374,9 @@ jobs:
                           ' | 3M:+' + str(round(s['ret_3m']*100)) + '%\n'
                           + sltp_lines
                           + s['signals'] +
-                          '\nVolume: ' + str(round(s['vol_today_ratio'],2)) + 'x MA20 ' + ('✅ PASS' if vol_pass else '❌')
+                          '\nVolume: ' + str(round(s['vol_today_ratio'],2)) + 'x MA20 ' +
+                          ('✅ PASS' if vol_pass else
+                           ('❌ (sell volume, ราคาลง)' if s['vol_today_ratio'] >= 1.5 and not s['price_up_today'] else '❌'))
                       )
                   send(msg)
 
