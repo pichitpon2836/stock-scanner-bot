@@ -344,16 +344,18 @@ jobs:
                                 ' ' + flag + ' ' + has_setup + '\n')
               send(theme_msg)
 
-              # TOP SETUPS — เฉพาะ theme ที่ติด top 7 และมี setup RS >= 70
-              top_themes = [t for t, _ in sorted_themes[:7]]
-              for theme in top_themes:
+              # TOP SETUPS — แสดงทุก theme ที่มี setup RS >= 70 (ไม่จำกัดแค่ Top7 อีกต่อไป)
+              # เหตุผล: item 2 (Top7 Theme) เป็นแค่ 1 ใน 6 เกณฑ์ checklist ไม่ใช่ hard gate
+              # แสดงอันดับ theme ให้เห็นชัดแทน เพื่อให้ผู้ใช้ประเมิน item 2 เองได้ทุกตัว
+              theme_rank = {t: i+1 for i, (t, _) in enumerate(sorted_themes)}
+              all_theme_names = [t for t, _ in sorted_themes]
+              for theme in all_theme_names:
                   if theme not in theme_results:
-                      # แจ้งว่าไม่มี setup แทนที่จะ skip เงียบๆ
-                      send('<b>TOP SETUPS: ' + theme + '</b> (Theme RS: ' + str(theme_rs[theme]) + ')\n'
-                           '⚠️ ไม่มีหุ้นผ่าน RS &gt;= 70 วันนี้ — theme leading แต่ยังไม่มี setup')
-                      continue
+                      continue  # ไม่มี setup วันนี้ — ข้ามเงียบๆ (ต่างจาก top7 เดิมที่แจ้งเตือนทุกตัว เพราะตอนนี้มี 22 theme จะรกเกินไป)
+                  rank = theme_rank[theme]
+                  top7_tag = ' [TOP7]' if rank <= 7 else ' [อันดับ ' + str(rank) + '/22]'
                   stocks = theme_results[theme][:TOP_N]
-                  msg = '<b>TOP SETUPS: ' + theme + '</b> (Theme RS: ' + str(theme_rs[theme]) + ')\n'
+                  msg = '<b>TOP SETUPS: ' + theme + top7_tag + '</b> (Theme RS: ' + str(theme_rs[theme]) + ')\n'
                   for i, s in enumerate(stocks):
                       ma21_str = str(round(s['pct_from_ma21']*100, 1))
                       sign     = '+' if float(ma21_str) >= 0 else ''
