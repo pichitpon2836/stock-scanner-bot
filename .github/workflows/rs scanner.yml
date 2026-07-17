@@ -56,7 +56,7 @@ jobs:
               'Crypto/Blockchain':       ['MSTR','COIN','RIOT','MARA','CLSK','HUT','IREN','WULF'],
               'Aerospace Components':    ['HWM','HEI','TDG','WWD','CW'],
               'Housing':                 ['TOL','DHI','PHM','LEN','NVR','KBH'],
-              'Cybersecurity':           ['PANW','CRWD','OKTA','FTNT','TENB','ZS'],
+              'Cybersecurity':           ['PANW','CRWD','OKTA','FTNT','TENB','ZS','RBRK'],
               'Managed Care':            ['CNC','OSCR','HUM','ALHC','ELV','CI','MOH'],
           }
 
